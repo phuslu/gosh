@@ -476,7 +476,7 @@ func (p *goshPromptState) formatTime(layout string) string {
 
 func (p *goshPromptState) runCommand(cmd string) string {
 	out, err := p.runScript(cmd)
-	if err != nil {
+	if err != nil && !IsExitStatus(err) {
 		return ""
 	}
 	return out
@@ -513,7 +513,7 @@ func goshRunSubshell(ctx context.Context, runner *interp.Runner, stdin io.Reader
 	var buf bytes.Buffer
 	interp.StdIO(stdin, &buf, stderr)(sub)
 	if err := sub.Run(ctx, prog); err != nil {
-		return "", err
+		return strings.TrimRight(buf.String(), "\n"), err
 	}
 	return strings.TrimRight(buf.String(), "\n"), nil
 }

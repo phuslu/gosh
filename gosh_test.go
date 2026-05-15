@@ -12,6 +12,7 @@ import (
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 func testEnv(t *testing.T) []string {
@@ -171,6 +172,49 @@ func TestPromptRenderer(t *testing.T) {
 	}
 	if got := goshDefaultPrompt(""); !strings.HasPrefix(got, "sh-0.0") {
 		t.Fatalf("empty-version prompt = %q", got)
+	}
+}
+
+func TestPromptCommandSubstitutionKeepsOutputOnExitStatus(t *testing.T) {
+	ctx := context.Background()
+	var stdout, stderr bytes.Buffer
+	runner, err := interp.New(
+		interp.Interactive(true),
+		interp.StdIO(strings.NewReader(""), &stdout, &stderr),
+		interp.Env(expand.ListEnviron(testEnv(t)...)),
+	)
+	if err != nil {
+		t.Fatalf("interp.New failed: %v", err)
+	}
+	run := func(script string) error {
+		prog, err := syntax.NewParser().Parse(strings.NewReader(script), "")
+		if err != nil {
+			return err
+		}
+		return runner.Run(ctx, prog)
+	}
+	if err := run(`__git_ps1() { printf "$1" master; return 7; }`); err != nil {
+		t.Fatalf("define __git_ps1 failed: %v", err)
+	}
+	if err := run(`false`); !IsExitStatus(err) {
+		t.Fatalf("false status = %v, want ExitStatus", err)
+	}
+
+	state := &goshPromptState{
+		ctx:       ctx,
+		runner:    runner,
+		stdin:     strings.NewReader(""),
+		stderr:    &stderr,
+		vars:      map[string]string{"USER": "alice", "HOME": "/home/alice"},
+		dir:       "/home/alice/project",
+		host:      "host.example",
+		shortHost: "host",
+		now:       time.Date(2026, 5, 15, 9, 8, 7, 0, time.UTC),
+	}
+	got := (&goshPromptRenderer{src: `\w$(__git_ps1 " (%s)")!`, state: state}).render()
+	want := "~/project (master)!"
+	if got != want {
+		t.Fatalf("prompt = %q, want %q", got, want)
 	}
 }
 
