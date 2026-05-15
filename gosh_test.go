@@ -230,3 +230,36 @@ func TestShoptQuiet(t *testing.T) {
 		t.Fatalf("stderr = %q, want empty", got)
 	}
 }
+
+func TestPrintfDashDash(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args: []string{"gosh", "-c", `
+			printf -- '%s\n' direct
+			builtin printf -- '%s\n' builtin
+			command printf -- '%s\n' command
+			printf() { echo "$1:$2"; }
+			printf -- function
+		`},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Env:     testEnv(t),
+		Version: "1.2.3",
+	})
+	if err != nil {
+		t.Fatalf("Run printf -- failed: %v\nstderr: %s", err, stderr.String())
+	}
+	want := strings.Join([]string{
+		"direct",
+		"builtin",
+		"command",
+		"--:function",
+		"",
+	}, "\n")
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout = %q, want %q\nstderr: %s", got, want, stderr.String())
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}

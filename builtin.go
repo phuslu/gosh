@@ -21,6 +21,17 @@ func goshCallHandler(runner func() *interp.Runner, history *goshHistory, binding
 			return args, nil
 		}
 		switch args[0] {
+		case "printf":
+			var r *interp.Runner
+			if runner != nil {
+				r = runner()
+			}
+			if r != nil && r.Funcs[args[0]] != nil {
+				return args, nil
+			}
+			if next, ok := goshDropBuiltinPrintfDashDash(args); ok {
+				return next, nil
+			}
 		case "shopt":
 			var r *interp.Runner
 			if runner != nil {
@@ -49,6 +60,11 @@ func goshCallHandler(runner func() *interp.Runner, history *goshHistory, binding
 				next = append(next, args[2:]...)
 				return next, nil
 			}
+			if len(args) >= 2 && args[1] == "printf" {
+				if next, ok := goshDropBuiltinPrintfDashDash(args[1:]); ok {
+					return append([]string{args[0]}, next...), nil
+				}
+			}
 		case "command":
 			var r *interp.Runner
 			if runner != nil {
@@ -61,6 +77,9 @@ func goshCallHandler(runner func() *interp.Runner, history *goshHistory, binding
 				next := make([]string, 1, len(shoptArgs)+1)
 				next[0] = goshShoptQuietCommand
 				next = append(next, shoptArgs...)
+				return next, nil
+			}
+			if next, ok := goshDropCommandPrintfDashDash(args); ok {
 				return next, nil
 			}
 		case "wget":
@@ -116,6 +135,27 @@ func goshCallHandler(runner func() *interp.Runner, history *goshHistory, binding
 		}
 		return args, nil
 	}
+}
+
+func goshDropBuiltinPrintfDashDash(args []string) ([]string, bool) {
+	if len(args) < 2 || args[0] != "printf" || args[1] != "--" {
+		return nil, false
+	}
+	next := make([]string, 1, len(args)-1)
+	next[0] = args[0]
+	next = append(next, args[2:]...)
+	return next, true
+}
+
+func goshDropCommandPrintfDashDash(args []string) ([]string, bool) {
+	if len(args) < 3 || args[0] != "command" || args[1] != "printf" || args[2] != "--" {
+		return nil, false
+	}
+	next := make([]string, 2, len(args)-1)
+	next[0] = args[0]
+	next[1] = args[1]
+	next = append(next, args[3:]...)
+	return next, true
 }
 
 func goshBuiltinWget(ctx context.Context, args []string, out io.Writer) (string, error) {
