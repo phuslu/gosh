@@ -98,6 +98,7 @@ func Run(c Config) error {
 	bindings := &goshKeyBindingManager{entries: make(map[string]*goKeyBindingEntry)}
 	var runner *interp.Runner
 	opts = append(opts, interp.CallHandler(goshCallHandler(func() *interp.Runner { return runner }, history, bindings)))
+	opts = append(opts, interp.ExecHandlers(goshExecHandler(func() *interp.Runner { return runner })))
 	runner, err = interp.New(opts...)
 	if err != nil {
 		return err

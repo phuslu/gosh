@@ -21,6 +21,48 @@ func goshCallHandler(runner func() *interp.Runner, history *goshHistory, binding
 			return args, nil
 		}
 		switch args[0] {
+		case "shopt":
+			var r *interp.Runner
+			if runner != nil {
+				r = runner()
+			}
+			if r != nil && r.Funcs[args[0]] != nil {
+				return args, nil
+			}
+			if goshShoptArgsHaveQuiet(args[1:]) {
+				next := make([]string, 1, len(args))
+				next[0] = goshShoptQuietCommand
+				next = append(next, args[1:]...)
+				return next, nil
+			}
+		case "builtin":
+			var r *interp.Runner
+			if runner != nil {
+				r = runner()
+			}
+			if r != nil && r.Funcs[args[0]] != nil {
+				return args, nil
+			}
+			if len(args) >= 2 && args[1] == "shopt" && goshShoptArgsHaveQuiet(args[2:]) {
+				next := make([]string, 1, len(args)-1)
+				next[0] = goshShoptQuietCommand
+				next = append(next, args[2:]...)
+				return next, nil
+			}
+		case "command":
+			var r *interp.Runner
+			if runner != nil {
+				r = runner()
+			}
+			if r != nil && r.Funcs[args[0]] != nil {
+				return args, nil
+			}
+			if shoptArgs, ok := goshCommandShoptQuietArgs(args[1:]); ok {
+				next := make([]string, 1, len(shoptArgs)+1)
+				next[0] = goshShoptQuietCommand
+				next = append(next, shoptArgs...)
+				return next, nil
+			}
 		case "wget":
 			if _, err := exec.LookPath(args[0]); err == nil {
 				return args, nil
@@ -72,6 +114,7 @@ func goshCallHandler(runner func() *interp.Runner, history *goshHistory, binding
 		default:
 			return args, nil
 		}
+		return args, nil
 	}
 }
 

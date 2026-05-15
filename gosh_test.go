@@ -187,3 +187,46 @@ func TestShellOptionVersion(t *testing.T) {
 		t.Fatalf("BASH_VERSION = %q", got)
 	}
 }
+
+func TestShoptQuiet(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args: []string{"gosh", "-c", `
+			if shopt -q extglob; then echo bad-extglob-default; else echo extglob-off; fi
+			shopt -s extglob
+			if shopt -q extglob; then echo extglob-on; else echo bad-extglob-set; fi
+			if builtin shopt -q extglob; then echo builtin-extglob-on; else echo bad-builtin-extglob; fi
+			if command shopt -q extglob; then echo command-extglob-on; else echo bad-command-extglob; fi
+			if shopt -q extglob nullglob; then echo bad-mixed; else echo mixed-off; fi
+			if shopt -q -o errexit; then echo bad-errexit-default; else echo errexit-off; fi
+			shopt -q -s nullglob
+			if shopt -q nullglob; then echo nullglob-on; else echo bad-nullglob-set; fi
+			shopt -qu nullglob
+			if shopt -q nullglob; then echo bad-nullglob-unset; else echo nullglob-off; fi
+		`},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Env:     testEnv(t),
+		Version: "1.2.3",
+	})
+	if err != nil {
+		t.Fatalf("Run shopt -q failed: %v\nstderr: %s", err, stderr.String())
+	}
+	want := strings.Join([]string{
+		"extglob-off",
+		"extglob-on",
+		"builtin-extglob-on",
+		"command-extglob-on",
+		"mixed-off",
+		"errexit-off",
+		"nullglob-on",
+		"nullglob-off",
+		"",
+	}, "\n")
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout = %q, want %q\nstderr: %s", got, want, stderr.String())
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
