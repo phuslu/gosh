@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chzyer/readline"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
@@ -133,6 +134,49 @@ func TestBindParser(t *testing.T) {
 	}
 	if got, ok := lookupBindAction(action); !ok || got != keyActionHistorySearchBackward {
 		t.Fatalf("bind action = %v, %v", got, ok)
+	}
+}
+
+func TestHistorySearchMovesCursorToEndOfMatch(t *testing.T) {
+	const long = `sed -i -E 's/const bufWriterPoolBufferSize = .+/var bufWriterPoolBufferSize = func() int { n, _ := strconv.Atoi(os.Getenv("HTTP2_WRITER_POOL_BUFFER_SIZE")); return max(n, 32768) }()/' /Users/xiangyu.lu/go/pkg/mod/golang.org/x/net@v0.54.0/http2/http2.go`
+	const short = `sed -n '1p' http2.go`
+
+	history := &history{limit: 10}
+	history.append("echo ignored")
+	history.append(short)
+	history.append(long)
+
+	var gotLine []rune
+	gotPos := -1
+	search := &historySearch{
+		history: history,
+		setBuffer: func(_ *readline.Instance, line []rune, pos int) bool {
+			gotLine = append([]rune(nil), line...)
+			gotPos = pos
+			return true
+		},
+		searchIndex: -1,
+	}
+
+	search.OnChange([]rune("sed"), 3, 0)
+	if !search.applySearch(keyActionHistorySearchBackward) {
+		t.Fatalf("first history search failed")
+	}
+	if got := string(gotLine); got != long {
+		t.Fatalf("first match = %q, want %q", got, long)
+	}
+	if gotPos != len([]rune(long)) {
+		t.Fatalf("first cursor position = %d, want %d", gotPos, len([]rune(long)))
+	}
+
+	if !search.applySearch(keyActionHistorySearchBackward) {
+		t.Fatalf("second history search failed")
+	}
+	if got := string(gotLine); got != short {
+		t.Fatalf("second match = %q, want %q", got, short)
+	}
+	if gotPos != len([]rune(short)) {
+		t.Fatalf("second cursor position = %d, want %d", gotPos, len([]rune(short)))
 	}
 }
 

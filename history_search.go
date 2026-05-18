@@ -18,8 +18,6 @@ type historySearch struct {
 	pos          int
 	searchActive bool
 	searchPrefix string
-	searchPos    int
-	searchEmpty  bool
 	searchIndex  int
 	historySize  int
 	setBuffer    func(*readline.Instance, []rune, int) bool
@@ -62,8 +60,6 @@ func (h *historySearch) resetSearch() {
 func (h *historySearch) resetSearchLocked() {
 	h.searchActive = false
 	h.searchPrefix = ""
-	h.searchPos = 0
-	h.searchEmpty = false
 	h.historySize = 0
 	h.searchIndex = -1
 }
@@ -77,8 +73,6 @@ func (h *historySearch) applySearch(action rune) bool {
 	entries := h.history.Entries()
 	if !h.searchActive || len(entries) != h.historySize {
 		h.searchPrefix = h.currentPrefixLocked()
-		h.searchPos = h.pos
-		h.searchEmpty = h.searchPos == 0 && h.searchPrefix == "" && len(h.line) == 0
 		h.searchActive = true
 		h.historySize = len(entries)
 		if action == keyActionHistorySearchBackward {
@@ -113,14 +107,7 @@ func (h *historySearch) applySearch(action rune) bool {
 		return false
 	}
 	runes := []rune(candidate)
-	pos := h.searchPos
-	if h.searchEmpty {
-		pos = len(runes)
-	} else if pos < 0 {
-		pos = 0
-	} else if pos > len(runes) {
-		pos = len(runes)
-	}
+	pos := len(runes)
 	if !h.setReadlineBuffer(runes, pos) {
 		return false
 	}
