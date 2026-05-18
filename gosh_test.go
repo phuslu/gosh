@@ -191,6 +191,19 @@ func TestHistorySearchCursorMoveUsesAbsolutePositioning(t *testing.T) {
 	}
 }
 
+func TestHistorySearchBellWritesDirectly(t *testing.T) {
+	var stdout bytes.Buffer
+	search := &historySearch{
+		rl: &readline.Instance{
+			Config: &readline.Config{Stdout: &stdout},
+		},
+	}
+	search.emitBell()
+	if got, want := stdout.Bytes(), []byte{0x07}; !bytes.Equal(got, want) {
+		t.Fatalf("bell output = %#v, want %#v", got, want)
+	}
+}
+
 func TestCompletionHelpers(t *testing.T) {
 	ctx := scanCompletionContext([]rune("cd ~/Do"))
 	if ctx.isCommand || ctx.command != "cd" || ctx.prefix != "~/Do" {

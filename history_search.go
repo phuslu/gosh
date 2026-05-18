@@ -269,7 +269,11 @@ func (h *historySearch) emitBell() {
 	if rl == nil {
 		return
 	}
-	if w := rl.Stdout(); w != nil {
-		_, _ = w.Write([]byte{0x07})
+	if rl.Terminal != nil {
+		_, _ = rl.Terminal.Write([]byte{0x07})
+		return
+	}
+	if rl.Config != nil && rl.Config.Stdout != nil {
+		_, _ = rl.Config.Stdout.Write([]byte{0x07})
 	}
 }
