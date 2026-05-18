@@ -15,7 +15,7 @@ import (
 	"mvdan.cc/sh/v3/interp"
 )
 
-func goshCallHandler(runner func() *interp.Runner, history *goshHistory, bindings *goshKeyBindingManager) interp.CallHandlerFunc {
+func callHandler(runner func() *interp.Runner, history *history, bindings *keyBindingManager) interp.CallHandlerFunc {
 	return func(ctx context.Context, args []string) ([]string, error) {
 		if len(args) == 0 {
 			return args, nil
@@ -29,7 +29,7 @@ func goshCallHandler(runner func() *interp.Runner, history *goshHistory, binding
 			if r != nil && r.Funcs[args[0]] != nil {
 				return args, nil
 			}
-			if next, ok := goshDropBuiltinPrintfDashDash(args); ok {
+			if next, ok := dropBuiltinPrintfDashDash(args); ok {
 				return next, nil
 			}
 		case "shopt":
@@ -40,9 +40,9 @@ func goshCallHandler(runner func() *interp.Runner, history *goshHistory, binding
 			if r != nil && r.Funcs[args[0]] != nil {
 				return args, nil
 			}
-			if goshShoptArgsHaveQuiet(args[1:]) {
+			if shoptArgsHaveQuiet(args[1:]) {
 				next := make([]string, 1, len(args))
-				next[0] = goshShoptQuietCommand
+				next[0] = shoptQuietCommand
 				next = append(next, args[1:]...)
 				return next, nil
 			}
@@ -54,14 +54,14 @@ func goshCallHandler(runner func() *interp.Runner, history *goshHistory, binding
 			if r != nil && r.Funcs[args[0]] != nil {
 				return args, nil
 			}
-			if len(args) >= 2 && args[1] == "shopt" && goshShoptArgsHaveQuiet(args[2:]) {
+			if len(args) >= 2 && args[1] == "shopt" && shoptArgsHaveQuiet(args[2:]) {
 				next := make([]string, 1, len(args)-1)
-				next[0] = goshShoptQuietCommand
+				next[0] = shoptQuietCommand
 				next = append(next, args[2:]...)
 				return next, nil
 			}
 			if len(args) >= 2 && args[1] == "printf" {
-				if next, ok := goshDropBuiltinPrintfDashDash(args[1:]); ok {
+				if next, ok := dropBuiltinPrintfDashDash(args[1:]); ok {
 					return append([]string{args[0]}, next...), nil
 				}
 			}
@@ -73,13 +73,13 @@ func goshCallHandler(runner func() *interp.Runner, history *goshHistory, binding
 			if r != nil && r.Funcs[args[0]] != nil {
 				return args, nil
 			}
-			if shoptArgs, ok := goshCommandShoptQuietArgs(args[1:]); ok {
+			if shoptArgs, ok := commandShoptQuietArgs(args[1:]); ok {
 				next := make([]string, 1, len(shoptArgs)+1)
-				next[0] = goshShoptQuietCommand
+				next[0] = shoptQuietCommand
 				next = append(next, shoptArgs...)
 				return next, nil
 			}
-			if next, ok := goshDropCommandPrintfDashDash(args); ok {
+			if next, ok := dropCommandPrintfDashDash(args); ok {
 				return next, nil
 			}
 		case "wget":
@@ -87,7 +87,7 @@ func goshCallHandler(runner func() *interp.Runner, history *goshHistory, binding
 				return args, nil
 			}
 			hc := interp.HandlerCtx(ctx)
-			file, err := goshBuiltinWget(ctx, args[1:], hc.Stdout)
+			file, err := builtinWget(ctx, args[1:], hc.Stdout)
 			if err != nil {
 				fmt.Fprintln(hc.Stderr, err)
 				return []string{"false"}, nil
@@ -137,7 +137,7 @@ func goshCallHandler(runner func() *interp.Runner, history *goshHistory, binding
 	}
 }
 
-func goshDropBuiltinPrintfDashDash(args []string) ([]string, bool) {
+func dropBuiltinPrintfDashDash(args []string) ([]string, bool) {
 	if len(args) < 2 || args[0] != "printf" || args[1] != "--" {
 		return nil, false
 	}
@@ -147,7 +147,7 @@ func goshDropBuiltinPrintfDashDash(args []string) ([]string, bool) {
 	return next, true
 }
 
-func goshDropCommandPrintfDashDash(args []string) ([]string, bool) {
+func dropCommandPrintfDashDash(args []string) ([]string, bool) {
 	if len(args) < 3 || args[0] != "command" || args[1] != "printf" || args[2] != "--" {
 		return nil, false
 	}
@@ -158,7 +158,7 @@ func goshDropCommandPrintfDashDash(args []string) ([]string, bool) {
 	return next, true
 }
 
-func goshBuiltinWget(ctx context.Context, args []string, out io.Writer) (string, error) {
+func builtinWget(ctx context.Context, args []string, out io.Writer) (string, error) {
 	if len(args) != 1 {
 		return "", fmt.Errorf("wget: builtin only supports a single URL argument")
 	}
@@ -194,7 +194,7 @@ func goshBuiltinWget(ctx context.Context, args []string, out io.Writer) (string,
 		return "", fmt.Errorf("wget: cannot open %s: %w", name, err)
 	}
 	defer file.Close()
-	progress := &goshWgetProgress{out: out, size: resp.ContentLength}
+	progress := &wgetProgress{out: out, size: resp.ContentLength}
 	defer progress.Done()
 	reader := io.TeeReader(resp.Body, progress)
 	if _, err := io.Copy(file, reader); err != nil {
@@ -206,7 +206,7 @@ func goshBuiltinWget(ctx context.Context, args []string, out io.Writer) (string,
 	return name, nil
 }
 
-type goshWgetProgress struct {
+type wgetProgress struct {
 	out   io.Writer
 	size  int64
 	total int64
@@ -214,7 +214,7 @@ type goshWgetProgress struct {
 	done  bool
 }
 
-func (p *goshWgetProgress) Write(b []byte) (int, error) {
+func (p *wgetProgress) Write(b []byte) (int, error) {
 	if p == nil || p.out == nil {
 		return len(b), nil
 	}
@@ -223,7 +223,7 @@ func (p *goshWgetProgress) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func (p *goshWgetProgress) print(force bool) {
+func (p *wgetProgress) print(force bool) {
 	if p == nil || p.out == nil {
 		return
 	}
@@ -239,7 +239,7 @@ func (p *goshWgetProgress) print(force bool) {
 	}
 }
 
-func (p *goshWgetProgress) Done() {
+func (p *wgetProgress) Done() {
 	if p == nil || p.out == nil || p.done {
 		return
 	}
@@ -248,7 +248,7 @@ func (p *goshWgetProgress) Done() {
 	p.done = true
 }
 
-func (p *goshWgetProgress) formatSize(v int64) string {
+func (p *wgetProgress) formatSize(v int64) string {
 	if v < 1024 {
 		return fmt.Sprintf("%dB", v)
 	}

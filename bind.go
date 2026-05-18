@@ -14,7 +14,7 @@ import (
 	"github.com/chzyer/readline"
 )
 
-type goshKeyBindingManager struct {
+type keyBindingManager struct {
 	mu      sync.RWMutex
 	entries map[string]*goKeyBindingEntry
 	actions map[rune]func(rune) bool
@@ -26,23 +26,23 @@ type goKeyBindingEntry struct {
 }
 
 const (
-	goshKeyActionHistorySearchBackward = 0x90
-	goshKeyActionHistorySearchForward  = 0x91
+	keyActionHistorySearchBackward = 0x90
+	keyActionHistorySearchForward  = 0x91
 )
 
-func (m *goshKeyBindingManager) handleBind(args []string) error {
-	keySpec, actionSpec, err := goshParseBindArgs(args)
+func (m *keyBindingManager) handleBind(args []string) error {
+	keySpec, actionSpec, err := parseBindArgs(args)
 	if err != nil {
 		return err
 	}
-	seq, err := goshParseKeySequence(keySpec)
+	seq, err := parseKeySequence(keySpec)
 	if err != nil {
 		return err
 	}
 	if len(seq) == 0 {
 		return fmt.Errorf("bind: empty key sequence")
 	}
-	actionRune, ok := goshLookupBindAction(actionSpec)
+	actionRune, ok := lookupBindAction(actionSpec)
 	if !ok {
 		return fmt.Errorf("bind: unsupported action %q", actionSpec)
 	}
@@ -50,7 +50,7 @@ func (m *goshKeyBindingManager) handleBind(args []string) error {
 	return nil
 }
 
-func (m *goshKeyBindingManager) store(seq []byte, action rune) {
+func (m *keyBindingManager) store(seq []byte, action rune) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := string(seq)
@@ -58,7 +58,7 @@ func (m *goshKeyBindingManager) store(seq []byte, action rune) {
 	m.entries[key] = entry
 }
 
-func (m *goshKeyBindingManager) registerActionHandler(action rune, handler func(rune) bool) {
+func (m *keyBindingManager) registerActionHandler(action rune, handler func(rune) bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if handler == nil {
@@ -73,7 +73,7 @@ func (m *goshKeyBindingManager) registerActionHandler(action rune, handler func(
 	m.actions[action] = handler
 }
 
-func (m *goshKeyBindingManager) invokeAction(action rune) bool {
+func (m *keyBindingManager) invokeAction(action rune) bool {
 	m.mu.RLock()
 	handler := m.actions[action]
 	m.mu.RUnlock()
@@ -83,7 +83,7 @@ func (m *goshKeyBindingManager) invokeAction(action rune) bool {
 	return handler(action)
 }
 
-func (m *goshKeyBindingManager) match(buf []byte) (rune, int, bool) {
+func (m *keyBindingManager) match(buf []byte) (rune, int, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if len(m.entries) == 0 {
@@ -110,7 +110,7 @@ func (m *goshKeyBindingManager) match(buf []byte) (rune, int, bool) {
 	return 0, 0, needMore
 }
 
-func goshParseBindArgs(args []string) (string, string, error) {
+func parseBindArgs(args []string) (string, string, error) {
 	if len(args) == 0 {
 		return "", "", fmt.Errorf("bind: missing arguments")
 	}
@@ -129,8 +129,8 @@ func goshParseBindArgs(args []string) (string, string, error) {
 	return strings.TrimSpace(key), strings.TrimSpace(action), nil
 }
 
-func goshParseKeySequence(spec string) ([]byte, error) {
-	s := goshTrimOuterQuotes(strings.TrimSpace(spec))
+func parseKeySequence(spec string) ([]byte, error) {
+	s := trimOuterQuotes(strings.TrimSpace(spec))
 	var out []byte
 	for i := 0; i < len(s); i++ {
 		ch := s[i]
@@ -198,8 +198,8 @@ func goshParseKeySequence(spec string) ([]byte, error) {
 	return out, nil
 }
 
-func goshLookupBindAction(action string) (rune, bool) {
-	switch strings.ToLower(goshTrimOuterQuotes(strings.TrimSpace(action))) {
+func lookupBindAction(action string) (rune, bool) {
+	switch strings.ToLower(trimOuterQuotes(strings.TrimSpace(action))) {
 	case "beginning-of-line", "start-of-line", "home":
 		return readline.CharLineStart, true
 	case "end-of-line", "cursor-end", "end":
@@ -209,15 +209,15 @@ func goshLookupBindAction(action string) (rune, bool) {
 	case "next-screen":
 		return readline.CharNext, true
 	case "history-search-backward":
-		return goshKeyActionHistorySearchBackward, true
+		return keyActionHistorySearchBackward, true
 	case "history-search-forward":
-		return goshKeyActionHistorySearchForward, true
+		return keyActionHistorySearchForward, true
 	default:
 		return 0, false
 	}
 }
 
-func goshTrimOuterQuotes(s string) string {
+func trimOuterQuotes(s string) string {
 	if len(s) >= 2 {
 		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
 			return s[1 : len(s)-1]
@@ -226,9 +226,9 @@ func goshTrimOuterQuotes(s string) string {
 	return s
 }
 
-type goshKeyBindingInput struct {
+type keyBindingInput struct {
 	src io.Reader
-	mgr *goshKeyBindingManager
+	mgr *keyBindingManager
 	buf []byte
 	out []byte
 	tmp [64]byte
@@ -236,19 +236,19 @@ type goshKeyBindingInput struct {
 	needMore bool
 }
 
-const goshKeyBindingPrefixTimeout = 50 * time.Millisecond
+const keyBindingPrefixTimeout = 50 * time.Millisecond
 
-type goshReadDeadliner interface {
+type readDeadliner interface {
 	SetReadDeadline(time.Time) error
 }
 
-func (r *goshKeyBindingInput) Read(p []byte) (int, error) {
+func (r *keyBindingInput) Read(p []byte) (int, error) {
 	for len(r.out) == 0 {
-		var deadliner goshReadDeadliner
+		var deadliner readDeadliner
 		deadlineSet := false
 		if r.needMore && len(r.buf) > 0 {
-			if d, ok := r.src.(goshReadDeadliner); ok {
-				if err := d.SetReadDeadline(time.Now().Add(goshKeyBindingPrefixTimeout)); err == nil {
+			if d, ok := r.src.(readDeadliner); ok {
+				if err := d.SetReadDeadline(time.Now().Add(keyBindingPrefixTimeout)); err == nil {
 					deadliner = d
 					deadlineSet = true
 				}
@@ -266,7 +266,7 @@ func (r *goshKeyBindingInput) Read(p []byte) (int, error) {
 			break
 		}
 		if err != nil {
-			if goshIsReadTimeout(err) && len(r.buf) > 0 {
+			if isReadTimeout(err) && len(r.buf) > 0 {
 				r.out = append(r.out, r.buf[0])
 				r.buf = r.buf[1:]
 				r.needMore = r.processBuffer()
@@ -291,7 +291,7 @@ func (r *goshKeyBindingInput) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func goshIsReadTimeout(err error) bool {
+func isReadTimeout(err error) bool {
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		return true
 	}
@@ -301,7 +301,7 @@ func goshIsReadTimeout(err error) bool {
 	return errors.As(err, &timeout) && timeout.Timeout()
 }
 
-func (r *goshKeyBindingInput) processBuffer() bool {
+func (r *keyBindingInput) processBuffer() bool {
 	for len(r.buf) > 0 {
 		action, size, needMore := r.mgr.match(r.buf)
 		if size > 0 {

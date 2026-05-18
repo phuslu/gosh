@@ -94,14 +94,14 @@ func TestHistoryEncodingAndControl(t *testing.T) {
 	for _, line := range []string{
 		"echo plain",
 		"echo one\necho two",
-		goshHistoryEncodedPrefix + "literal",
+		historyEncodedPrefix + "literal",
 	} {
-		if got := goshDecodeHistoryLine(goshEncodeHistoryLine(line)); got != line {
+		if got := decodeHistoryLine(encodeHistoryLine(line)); got != line {
 			t.Fatalf("history roundtrip = %q, want %q", got, line)
 		}
 	}
 
-	history := &goshHistory{limit: 10, control: goshParseHistoryControl("ignoreboth")}
+	history := &history{limit: 10, control: parseHistoryControl("ignoreboth")}
 	if history.Add(" leading-space") {
 		t.Fatalf("history saved ignorespace entry")
 	}
@@ -117,47 +117,47 @@ func TestHistoryEncodingAndControl(t *testing.T) {
 }
 
 func TestBindParser(t *testing.T) {
-	key, action, err := goshParseBindArgs([]string{`"\e[A": history-search-backward`})
+	key, action, err := parseBindArgs([]string{`"\e[A": history-search-backward`})
 	if err != nil {
-		t.Fatalf("goshParseBindArgs failed: %v", err)
+		t.Fatalf("parseBindArgs failed: %v", err)
 	}
 	if key != `"\e[A"` || action != "history-search-backward" {
 		t.Fatalf("bind args = %q, %q", key, action)
 	}
-	seq, err := goshParseKeySequence(key)
+	seq, err := parseKeySequence(key)
 	if err != nil {
-		t.Fatalf("goshParseKeySequence failed: %v", err)
+		t.Fatalf("parseKeySequence failed: %v", err)
 	}
 	if want := []byte{0x1b, '[', 'A'}; !reflect.DeepEqual(seq, want) {
 		t.Fatalf("key sequence = %#v, want %#v", seq, want)
 	}
-	if got, ok := goshLookupBindAction(action); !ok || got != goshKeyActionHistorySearchBackward {
+	if got, ok := lookupBindAction(action); !ok || got != keyActionHistorySearchBackward {
 		t.Fatalf("bind action = %v, %v", got, ok)
 	}
 }
 
 func TestCompletionHelpers(t *testing.T) {
-	ctx := goshScanCompletionContext([]rune("cd ~/Do"))
+	ctx := scanCompletionContext([]rune("cd ~/Do"))
 	if ctx.isCommand || ctx.command != "cd" || ctx.prefix != "~/Do" {
 		t.Fatalf("completion context = %#v", ctx)
 	}
-	if got, want := goshEscapeCompletionForContext("a b$", 0), `a\ b\$`; got != want {
+	if got, want := escapeCompletionForContext("a b$", 0), `a\ b\$`; got != want {
 		t.Fatalf("escaped completion = %q, want %q", got, want)
 	}
-	if got, want := goshEscapeCompletionForContext(`a"$`, '"'), `a\"\$`; got != want {
+	if got, want := escapeCompletionForContext(`a"$`, '"'), `a\"\$`; got != want {
 		t.Fatalf("double-quoted completion = %q, want %q", got, want)
 	}
-	if got, want := goshLongestCommonPrefix([]string{"alpha", "alpine"}), "alp"; got != want {
+	if got, want := longestCommonPrefix([]string{"alpha", "alpine"}), "alp"; got != want {
 		t.Fatalf("longest common prefix = %q, want %q", got, want)
 	}
-	expanded, ok := goshExpandTilde("~/src", "/home/tester")
+	expanded, ok := expandTilde("~/src", "/home/tester")
 	if !ok || expanded != filepath.Join("/home/tester", "src") {
-		t.Fatalf("goshExpandTilde = %q, %v", expanded, ok)
+		t.Fatalf("expandTilde = %q, %v", expanded, ok)
 	}
 }
 
 func TestPromptRenderer(t *testing.T) {
-	state := &goshPromptState{
+	state := &promptState{
 		vars:      map[string]string{"USER": "alice", "HOME": "/home/alice"},
 		dir:       "/home/alice/project",
 		host:      "host.example",
@@ -165,12 +165,12 @@ func TestPromptRenderer(t *testing.T) {
 		seq:       3,
 		now:       time.Date(2026, 5, 15, 9, 8, 7, 0, time.UTC),
 	}
-	got := (&goshPromptRenderer{src: `\u@\h:\w \D{%F} \# \$`, state: state}).render()
+	got := (&promptRenderer{src: `\u@\h:\w \D{%F} \# \$`, state: state}).render()
 	want := "alice@host:~/project 2026-05-15 3 " + state.promptSymbol()
 	if got != want {
 		t.Fatalf("prompt = %q, want %q", got, want)
 	}
-	if got := goshDefaultPrompt(""); !strings.HasPrefix(got, "sh-0.0") {
+	if got := defaultPrompt(""); !strings.HasPrefix(got, "sh-0.0") {
 		t.Fatalf("empty-version prompt = %q", got)
 	}
 }
@@ -200,7 +200,7 @@ func TestPromptCommandSubstitutionKeepsOutputOnExitStatus(t *testing.T) {
 		t.Fatalf("false status = %v, want ExitStatus", err)
 	}
 
-	state := &goshPromptState{
+	state := &promptState{
 		ctx:       ctx,
 		runner:    runner,
 		stdin:     strings.NewReader(""),
@@ -211,7 +211,7 @@ func TestPromptCommandSubstitutionKeepsOutputOnExitStatus(t *testing.T) {
 		shortHost: "host",
 		now:       time.Date(2026, 5, 15, 9, 8, 7, 0, time.UTC),
 	}
-	got := (&goshPromptRenderer{src: `\w$(__git_ps1 " (%s)")!`, state: state}).render()
+	got := (&promptRenderer{src: `\w$(__git_ps1 " (%s)")!`, state: state}).render()
 	want := "~/project (master)!"
 	if got != want {
 		t.Fatalf("prompt = %q, want %q", got, want)
@@ -219,7 +219,7 @@ func TestPromptCommandSubstitutionKeepsOutputOnExitStatus(t *testing.T) {
 }
 
 func TestShellOptionVersion(t *testing.T) {
-	env := &goshShellEnviron{
+	env := &shellEnviron{
 		base:    expand.ListEnviron("X=1"),
 		flags:   func() string { return "hBs" },
 		version: "1.2.3",

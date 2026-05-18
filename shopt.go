@@ -7,11 +7,11 @@ import (
 	"mvdan.cc/sh/v3/interp"
 )
 
-const goshShoptQuietCommand = "__gosh_shopt_quiet"
+const shoptQuietCommand = "__gosh_shopt_quiet"
 
 // These tables mirror mvdan.cc/sh's internal shopt option order, because the
 // corresponding option states are only exposed as an unexported bool slice.
-var goshShoptPosixOptionNames = []string{
+var shoptPosixOptionNames = []string{
 	"allexport",
 	"errexit",
 	"noexec",
@@ -21,7 +21,7 @@ var goshShoptPosixOptionNames = []string{
 	"pipefail",
 }
 
-var goshShoptBashOptionNames = []string{
+var shoptBashOptionNames = []string{
 	"dotglob",
 	"expand_aliases",
 	"extglob",
@@ -78,7 +78,7 @@ var goshShoptBashOptionNames = []string{
 	"xpg_echo",
 }
 
-type goshShoptArgs struct {
+type shoptArgs struct {
 	quiet       bool
 	posix       bool
 	mode        string
@@ -88,13 +88,13 @@ type goshShoptArgs struct {
 	forward     []string
 }
 
-type goshShoptFlagParser struct {
+type shoptFlagParser struct {
 	current           string
 	remaining         []string
 	stoppedByDashDash bool
 }
 
-func (p *goshShoptFlagParser) more() bool {
+func (p *shoptFlagParser) more() bool {
 	if p.current != "" {
 		return true
 	}
@@ -114,7 +114,7 @@ func (p *goshShoptFlagParser) more() bool {
 	return true
 }
 
-func (p *goshShoptFlagParser) flag() string {
+func (p *shoptFlagParser) flag() string {
 	arg := p.current
 	if arg == "" {
 		arg = p.remaining[0]
@@ -129,31 +129,31 @@ func (p *goshShoptFlagParser) flag() string {
 	return arg
 }
 
-func (p *goshShoptFlagParser) args() []string {
+func (p *shoptFlagParser) args() []string {
 	return p.remaining
 }
 
-func goshExecHandler(runner func() *interp.Runner) func(interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+func execHandler(runner func() *interp.Runner) func(interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 	return func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 		return func(ctx context.Context, args []string) error {
-			if len(args) > 0 && args[0] == goshShoptQuietCommand {
+			if len(args) > 0 && args[0] == shoptQuietCommand {
 				var r *interp.Runner
 				if runner != nil {
 					r = runner()
 				}
-				return goshRunShoptQuiet(ctx, r, args[1:])
+				return runShoptQuiet(ctx, r, args[1:])
 			}
 			return next(ctx, args)
 		}
 	}
 }
 
-func goshShoptArgsHaveQuiet(args []string) bool {
-	return goshParseShoptArgs(args).quiet
+func shoptArgsHaveQuiet(args []string) bool {
+	return parseShoptArgs(args).quiet
 }
 
-func goshCommandShoptQuietArgs(args []string) ([]string, bool) {
-	fp := goshShoptFlagParser{remaining: args}
+func commandShoptQuietArgs(args []string) ([]string, bool) {
+	fp := shoptFlagParser{remaining: args}
 	show := false
 	for fp.more() {
 		switch flag := fp.flag(); flag {
@@ -167,15 +167,15 @@ func goshCommandShoptQuietArgs(args []string) ([]string, bool) {
 		return nil, false
 	}
 	rest := fp.args()
-	if len(rest) == 0 || rest[0] != "shopt" || !goshShoptArgsHaveQuiet(rest[1:]) {
+	if len(rest) == 0 || rest[0] != "shopt" || !shoptArgsHaveQuiet(rest[1:]) {
 		return nil, false
 	}
 	return rest[1:], true
 }
 
-func goshParseShoptArgs(args []string) goshShoptArgs {
-	fp := goshShoptFlagParser{remaining: args}
-	var parsed goshShoptArgs
+func parseShoptArgs(args []string) shoptArgs {
+	fp := shoptFlagParser{remaining: args}
+	var parsed shoptArgs
 	for fp.more() {
 		switch flag := fp.flag(); flag {
 		case "-q":
@@ -202,9 +202,9 @@ func goshParseShoptArgs(args []string) goshShoptArgs {
 	return parsed
 }
 
-func goshRunShoptQuiet(ctx context.Context, runner *interp.Runner, args []string) error {
+func runShoptQuiet(ctx context.Context, runner *interp.Runner, args []string) error {
 	hc := interp.HandlerCtx(ctx)
-	parsed := goshParseShoptArgs(args)
+	parsed := parseShoptArgs(args)
 	if parsed.unsupported != "" {
 		fmt.Fprintf(hc.Stderr, "shopt: unsupported option %q\n", parsed.unsupported)
 		return interp.ExitStatus(2)
@@ -225,7 +225,7 @@ func goshRunShoptQuiet(ctx context.Context, runner *interp.Runner, args []string
 		return hc.Builtin(ctx, next)
 	}
 	for _, arg := range parsed.args {
-		enabled, ok := goshShoptOptionEnabled(runner, parsed.posix, arg)
+		enabled, ok := shoptOptionEnabled(runner, parsed.posix, arg)
 		if !ok {
 			fmt.Fprintf(hc.Stderr, "shopt: invalid option name %q\n", arg)
 			return interp.ExitStatus(1)
@@ -237,10 +237,10 @@ func goshRunShoptQuiet(ctx context.Context, runner *interp.Runner, args []string
 	return nil
 }
 
-func goshShoptOptionEnabled(runner *interp.Runner, posix bool, name string) (bool, bool) {
-	opts := goshRunnerOpts(runner)
+func shoptOptionEnabled(runner *interp.Runner, posix bool, name string) (bool, bool) {
+	opts := runnerOpts(runner)
 	if posix {
-		for i, opt := range goshShoptPosixOptionNames {
+		for i, opt := range shoptPosixOptionNames {
 			if opt == name {
 				if i >= len(opts) {
 					return false, false
@@ -250,9 +250,9 @@ func goshShoptOptionEnabled(runner *interp.Runner, posix bool, name string) (boo
 		}
 		return false, false
 	}
-	for i, opt := range goshShoptBashOptionNames {
+	for i, opt := range shoptBashOptionNames {
 		if opt == name {
-			index := len(goshShoptPosixOptionNames) + i
+			index := len(shoptPosixOptionNames) + i
 			if index >= len(opts) {
 				return false, false
 			}

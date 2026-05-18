@@ -53,9 +53,9 @@ func Run(c Config) error {
 	if stderr == nil {
 		stderr = io.Discard
 	}
-	env := goshEnvironWithDefaultShell(c.Env)
+	env := environWithDefaultShell(c.Env)
 
-	command, err := goshParseCommand(args)
+	command, err := parseCommand(args)
 	if err != nil {
 		return err
 	}
@@ -94,16 +94,16 @@ func Run(c Config) error {
 	}
 
 	parser := syntax.NewParser()
-	history := &goshHistory{limit: goshResolveHistoryLimit()}
-	bindings := &goshKeyBindingManager{entries: make(map[string]*goKeyBindingEntry)}
+	history := &history{limit: resolveHistoryLimit()}
+	bindings := &keyBindingManager{entries: make(map[string]*goKeyBindingEntry)}
 	var runner *interp.Runner
-	opts = append(opts, interp.CallHandler(goshCallHandler(func() *interp.Runner { return runner }, history, bindings)))
-	opts = append(opts, interp.ExecHandlers(goshExecHandler(func() *interp.Runner { return runner })))
+	opts = append(opts, interp.CallHandler(callHandler(func() *interp.Runner { return runner }, history, bindings)))
+	opts = append(opts, interp.ExecHandlers(execHandler(func() *interp.Runner { return runner })))
 	runner, err = interp.New(opts...)
 	if err != nil {
 		return err
 	}
-	goshInstallShellOptionVariable(runner, interactive, command == nil, version)
+	installShellOptionVariable(runner, interactive, command == nil, version)
 
 	runner.Run(ctx, func() *syntax.File {
 		prog, err := parser.Parse(strings.NewReader(`
@@ -124,7 +124,7 @@ func Run(c Config) error {
 
 	// source the init files.
 	if command == nil {
-		file, err := os.Open(goshResolveInitFile(env, interactive))
+		file, err := os.Open(resolveInitFile(env, interactive))
 		if err == nil {
 			prog, err := parser.Parse(file, file.Name())
 			if err != nil {
@@ -138,9 +138,9 @@ func Run(c Config) error {
 		}
 	}
 
-	defaultPrompt := goshDefaultPrompt(version)
+	promptFallback := defaultPrompt(version)
 	promptSeq := 1
-	currentPrompt := goshPromptString(ctx, runner, stdin, stderr, "PS1", defaultPrompt, promptSeq)
+	currentPrompt := promptString(ctx, runner, stdin, stderr, "PS1", promptFallback, promptSeq)
 	promptSeq++
 
 	if command != nil {
@@ -164,22 +164,22 @@ func Run(c Config) error {
 	// Non-interactive: parse stdin as a script and run it directly.
 	if !interactive {
 		runner.Reset()
-		return goshRunNonInteractiveStream(ctx, stdin, runner, stdout, stderr)
+		return runNonInteractiveStream(ctx, stdin, runner, stdout, stderr)
 	}
 
 	// export HISTFILE=""
-	history.limit = goshResolveShellHistoryLimit(runner)
-	history.control = goshResolveShellHistoryControl(runner)
-	histFile := goshResolveShellHistoryFile(runner)
+	history.limit = resolveShellHistoryLimit(runner)
+	history.control = resolveShellHistoryControl(runner)
+	histFile := resolveShellHistoryFile(runner)
 	history.file = histFile
 
 	conWriter := ptyNewConsoleANSIWriter(stderr)
-	boundStdin := &goshKeyBindingInput{src: stdin, mgr: bindings}
-	promptPrinter := &goshPromptPrinter{}
-	completer := &goshAutoCompleter{ctx: ctx, runner: runner, stdin: stdin, stdout: conWriter, stderr: conWriter, promptPrinter: promptPrinter}
-	historySearch := &goshHistorySearch{history: history, searchIndex: -1}
-	bindings.registerActionHandler(goshKeyActionHistorySearchBackward, historySearch.Search)
-	bindings.registerActionHandler(goshKeyActionHistorySearchForward, historySearch.Search)
+	boundStdin := &keyBindingInput{src: stdin, mgr: bindings}
+	promptPrinter := &promptPrinter{}
+	completer := &autoCompleter{ctx: ctx, runner: runner, stdin: stdin, stdout: conWriter, stderr: conWriter, promptPrinter: promptPrinter}
+	historySearch := &historySearch{history: history, searchIndex: -1}
+	bindings.registerActionHandler(keyActionHistorySearchBackward, historySearch.Search)
+	bindings.registerActionHandler(keyActionHistorySearchForward, historySearch.Search)
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt:                 currentPrompt.prompt,
 		HistoryLimit:           history.limit,
@@ -210,7 +210,7 @@ func Run(c Config) error {
 	defer rl.Close()
 	promptPrinter.Print(rl.Stdout(), currentPrompt.prefix)
 	nextPrefix := ""
-	setPrompt := func(parts goshPromptParts) {
+	setPrompt := func(parts promptParts) {
 		rl.SetPrompt(parts.prompt)
 		nextPrefix = parts.prefix
 	}
@@ -226,24 +226,24 @@ func Run(c Config) error {
 			// Windows consoles may lose VT mode after programs exit.
 			_ = c.EnableVirtualTerminal(true, false, false)
 		}
-		setPrompt(goshPromptString(ctx, runner, stdin, stderr, "PS1", goshDefaultPrompt(version), promptSeq))
+		setPrompt(promptString(ctx, runner, stdin, stderr, "PS1", defaultPrompt(version), promptSeq))
 		promptSeq++
 		flushPrefix()
 	}
 
-	// goshReader wraps readline so parser.Interactive can consume it as an
+	// reader wraps readline so parser.Interactive can consume it as an
 	// io.Reader. Each call to Read invokes Readline() to fetch one line.
 	// Ctrl-C (ErrInterrupt) injects a newline to abandon the current
 	// incomplete statement. Ctrl-D / EOF returns io.EOF to end the session.
-	rdr := &goshReader{rl: rl, history: history}
+	rdr := &reader{rl: rl, history: history}
 
-	return goshRunInteractiveParser(parser, rdr, func(stmts []*syntax.Stmt) bool {
+	return runInteractiveParser(parser, rdr, func(stmts []*syntax.Stmt) bool {
 		// parser.Incomplete() returns true when the parser has consumed a
 		// partial statement and is waiting for more input (e.g. open quotes,
 		// unclosed if/for blocks). Switch to the continuation prompt and keep
 		// reading without executing anything yet.
 		if parser.Incomplete() {
-			setPrompt(goshPromptString(ctx, runner, stdin, stderr, "PS2", "> ", promptSeq))
+			setPrompt(promptString(ctx, runner, stdin, stderr, "PS2", "> ", promptSeq))
 			flushPrefix()
 			return true
 		}

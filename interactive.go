@@ -13,7 +13,7 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-func goshRunInteractiveParser(parser *syntax.Parser, r io.Reader, run func([]*syntax.Stmt) bool, handleError func(error) bool) error {
+func runInteractiveParser(parser *syntax.Parser, r io.Reader, run func([]*syntax.Stmt) bool, handleError func(error) bool) error {
 	for {
 		err := parser.Interactive(r, run)
 		if err == nil {
@@ -25,7 +25,7 @@ func goshRunInteractiveParser(parser *syntax.Parser, r io.Reader, run func([]*sy
 	}
 }
 
-func goshRunNonInteractiveStream(ctx context.Context, r io.Reader, runner *interp.Runner, stdout, stderr io.Writer) error {
+func runNonInteractiveStream(ctx context.Context, r io.Reader, runner *interp.Runner, stdout, stderr io.Writer) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -33,14 +33,14 @@ func goshRunNonInteractiveStream(ctx context.Context, r io.Reader, runner *inter
 	var runErr error
 	var lastStatus error
 	for offset := 0; offset < len(data); {
-		stmts, next, err := goshParseNextStatements(data, offset)
+		stmts, next, err := parseNextStatements(data, offset)
 		if err != nil {
 			return err
 		}
 		if next <= offset {
 			break
 		}
-		stdin, err := goshRemainingStdinFile(data[next:])
+		stdin, err := remainingStdinFile(data[next:])
 		if err != nil {
 			return err
 		}
@@ -83,7 +83,7 @@ func goshRunNonInteractiveStream(ctx context.Context, r io.Reader, runner *inter
 	return lastStatus
 }
 
-func goshParseNextStatements(data []byte, offset int) ([]*syntax.Stmt, int, error) {
+func parseNextStatements(data []byte, offset int) ([]*syntax.Stmt, int, error) {
 	for next := offset; next < len(data); {
 		if idx := bytes.IndexByte(data[next:], '\n'); idx >= 0 {
 			next += idx + 1
@@ -109,7 +109,7 @@ func goshParseNextStatements(data []byte, offset int) ([]*syntax.Stmt, int, erro
 	return nil, len(data), io.ErrUnexpectedEOF
 }
 
-func goshRemainingStdinFile(data []byte) (*os.File, error) {
+func remainingStdinFile(data []byte) (*os.File, error) {
 	file, err := os.CreateTemp("", "gosh-stdin-*")
 	if err != nil {
 		return nil, err
@@ -127,16 +127,16 @@ func goshRemainingStdinFile(data []byte) (*os.File, error) {
 	return file, nil
 }
 
-// goshReader adapts *readline.Instance to the io.Reader interface expected by
+// reader adapts *readline.Instance to the io.Reader interface expected by
 // parser.Interactive. The parser calls Read whenever it needs more input.
-type goshReader struct {
+type reader struct {
 	rl                  *readline.Instance
 	buf                 []byte // leftover bytes from the previous Readline call
-	history             *goshHistory
+	history             *history
 	pendingHistoryLines []string
 }
 
-func (r *goshReader) Read(p []byte) (int, error) {
+func (r *reader) Read(p []byte) (int, error) {
 	// Drain any bytes that did not fit into p on the previous call.
 	if len(r.buf) > 0 {
 		n := copy(p, r.buf)
@@ -166,16 +166,16 @@ func (r *goshReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func (r *goshReader) savePendingHistory() {
+func (r *reader) savePendingHistory() {
 	if len(r.pendingHistoryLines) == 0 {
 		return
 	}
-	line := goshHistoryLine(r.pendingHistoryLines)
+	line := historyLine(r.pendingHistoryLines)
 	r.pendingHistoryLines = r.pendingHistoryLines[:0]
 	r.saveHistoryLine(line)
 }
 
-func (r *goshReader) saveHistoryLine(line string) {
+func (r *reader) saveHistoryLine(line string) {
 	if r.rl == nil {
 		if r.history != nil {
 			r.history.Add(line)
@@ -193,6 +193,6 @@ func (r *goshReader) saveHistoryLine(line string) {
 	_ = r.rl.SaveHistory("")
 }
 
-func goshHistoryLine(lines []string) string {
+func historyLine(lines []string) string {
 	return strings.Join(lines, "\n")
 }

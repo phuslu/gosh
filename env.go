@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-func goshDefaultShell() string {
+func defaultShell() string {
 	if exe, err := exec.LookPath("bash"); err == nil {
 		return exe
 	}
@@ -20,18 +20,18 @@ func goshDefaultShell() string {
 	}
 }
 
-func goshEnvironWithDefaultShell(env []string) []string {
+func environWithDefaultShell(env []string) []string {
 	if env == nil {
 		env = os.Environ()
 	}
 	env = slices.Clone(env)
-	if _, ok := goshLookupEnv(env, "SHELL"); !ok {
-		env = append(env, "SHELL="+goshDefaultShell())
+	if _, ok := lookupEnv(env, "SHELL"); !ok {
+		env = append(env, "SHELL="+defaultShell())
 	}
 	return env
 }
 
-func goshLookupEnv(env []string, key string) (string, bool) {
+func lookupEnv(env []string, key string) (string, bool) {
 	for i := len(env) - 1; i >= 0; i-- {
 		name, value, ok := strings.Cut(env[i], "=")
 		if !ok {
@@ -44,22 +44,22 @@ func goshLookupEnv(env []string, key string) (string, bool) {
 	return "", false
 }
 
-func goshExpandEnv(env []string, s string) string {
+func expandEnv(env []string, s string) string {
 	return os.Expand(s, func(key string) string {
-		value, _ := goshLookupEnv(env, key)
+		value, _ := lookupEnv(env, key)
 		return value
 	})
 }
 
-func goshResolveInitFile(env []string, interactive bool) string {
-	file, ok := goshLookupEnv(env, "GOSH_ENV")
+func resolveInitFile(env []string, interactive bool) string {
+	file, ok := lookupEnv(env, "GOSH_ENV")
 	if !ok && interactive {
 		file = "$HOME/.bashrc"
 	}
 	if file == "" {
 		return ""
 	}
-	return goshExpandEnv(env, file)
+	return expandEnv(env, file)
 }
 
 func SetEnv(env []string, key, value string) []string {

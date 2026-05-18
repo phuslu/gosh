@@ -9,7 +9,7 @@ import (
 	"mvdan.cc/sh/v3/interp"
 )
 
-func goshInstallShellOptionVariable(runner *interp.Runner, interactive, readFromStdin bool, version string) {
+func installShellOptionVariable(runner *interp.Runner, interactive, readFromStdin bool, version string) {
 	if runner == nil {
 		return
 	}
@@ -17,21 +17,21 @@ func goshInstallShellOptionVariable(runner *interp.Runner, interactive, readFrom
 	if base == nil {
 		base = expand.ListEnviron()
 	}
-	provider := &goshShellOptionProvider{
+	provider := &shellOptionProvider{
 		runner:        runner,
 		interactive:   interactive,
 		readFromStdin: readFromStdin,
 	}
-	runner.Env = &goshShellEnviron{base: base, flags: provider.Flags, version: version}
+	runner.Env = &shellEnviron{base: base, flags: provider.Flags, version: version}
 }
 
-type goshShellEnviron struct {
+type shellEnviron struct {
 	base    expand.Environ
 	flags   func() string
 	version string
 }
 
-func (e *goshShellEnviron) Get(name string) expand.Variable {
+func (e *shellEnviron) Get(name string) expand.Variable {
 	switch name {
 	case "-":
 		return expand.Variable{Set: true, Kind: expand.String, Str: e.flags()}
@@ -44,24 +44,24 @@ func (e *goshShellEnviron) Get(name string) expand.Variable {
 	return e.base.Get(name)
 }
 
-func (e *goshShellEnviron) Each(f func(name string, vr expand.Variable) bool) {
+func (e *shellEnviron) Each(f func(name string, vr expand.Variable) bool) {
 	if e.base == nil {
 		return
 	}
 	e.base.Each(f)
 }
 
-type goshShellOptionProvider struct {
+type shellOptionProvider struct {
 	runner        *interp.Runner
 	interactive   bool
 	readFromStdin bool
 }
 
-func (p *goshShellOptionProvider) Flags() string {
+func (p *shellOptionProvider) Flags() string {
 	if p == nil || p.runner == nil {
 		return ""
 	}
-	opts := goshRunnerOpts(p.runner)
+	opts := runnerOpts(p.runner)
 	var b strings.Builder
 	b.WriteByte('h')
 	if p.interactive {
@@ -96,7 +96,7 @@ func (p *goshShellOptionProvider) Flags() string {
 	return b.String()
 }
 
-func goshRunnerOpts(r *interp.Runner) []bool {
+func runnerOpts(r *interp.Runner) []bool {
 	if r == nil {
 		return nil
 	}

@@ -5,14 +5,14 @@ import (
 	"strings"
 )
 
-type goshCommandSpec struct {
+type commandSpec struct {
 	script string
 	argv0  string
 	params []string
 }
 
-func goshParseCommand(args []string) (*goshCommandSpec, error) {
-	var spec *goshCommandSpec
+func parseCommand(args []string) (*commandSpec, error) {
+	var spec *commandSpec
 	for i := 1; i < len(args); i++ {
 		if args[i] != "-c" {
 			continue
@@ -23,7 +23,7 @@ func goshParseCommand(args []string) (*goshCommandSpec, error) {
 		if i+1 >= len(args) {
 			return nil, fmt.Errorf("gosh: -c requires a command string")
 		}
-		spec = &goshCommandSpec{
+		spec = &commandSpec{
 			script: strings.Clone(args[i+1]),
 			argv0:  strings.Clone(args[0]),
 		}

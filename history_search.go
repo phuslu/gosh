@@ -9,8 +9,8 @@ import (
 	"github.com/chzyer/readline"
 )
 
-type goshHistorySearch struct {
-	history *goshHistory
+type historySearch struct {
+	history *history
 	rl      *readline.Instance
 
 	mu           sync.Mutex
@@ -25,13 +25,13 @@ type goshHistorySearch struct {
 	setBuffer    func(*readline.Instance, []rune, int) bool
 }
 
-func (h *goshHistorySearch) Attach(rl *readline.Instance) {
+func (h *historySearch) Attach(rl *readline.Instance) {
 	h.mu.Lock()
 	h.rl = rl
 	h.mu.Unlock()
 }
 
-func (h *goshHistorySearch) Search(action rune) bool {
+func (h *historySearch) Search(action rune) bool {
 	if h.applySearch(action) {
 		return true
 	}
@@ -39,7 +39,7 @@ func (h *goshHistorySearch) Search(action rune) bool {
 	return true
 }
 
-func (h *goshHistorySearch) OnChange(line []rune, pos int, _ rune) (newLine []rune, newPos int, ok bool) {
+func (h *historySearch) OnChange(line []rune, pos int, _ rune) (newLine []rune, newPos int, ok bool) {
 	h.mu.Lock()
 	h.line = append(h.line[:0], line...)
 	if pos < 0 {
@@ -53,13 +53,13 @@ func (h *goshHistorySearch) OnChange(line []rune, pos int, _ rune) (newLine []ru
 	return nil, 0, false
 }
 
-func (h *goshHistorySearch) resetSearch() {
+func (h *historySearch) resetSearch() {
 	h.mu.Lock()
 	h.resetSearchLocked()
 	h.mu.Unlock()
 }
 
-func (h *goshHistorySearch) resetSearchLocked() {
+func (h *historySearch) resetSearchLocked() {
 	h.searchActive = false
 	h.searchPrefix = ""
 	h.searchPos = 0
@@ -68,7 +68,7 @@ func (h *goshHistorySearch) resetSearchLocked() {
 	h.searchIndex = -1
 }
 
-func (h *goshHistorySearch) applySearch(action rune) bool {
+func (h *historySearch) applySearch(action rune) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.history == nil || h.rl == nil && h.setBuffer == nil {
@@ -81,7 +81,7 @@ func (h *goshHistorySearch) applySearch(action rune) bool {
 		h.searchEmpty = h.searchPos == 0 && h.searchPrefix == "" && len(h.line) == 0
 		h.searchActive = true
 		h.historySize = len(entries)
-		if action == goshKeyActionHistorySearchBackward {
+		if action == keyActionHistorySearchBackward {
 			h.searchIndex = len(entries)
 		} else {
 			h.searchIndex = -1
@@ -92,7 +92,7 @@ func (h *goshHistorySearch) applySearch(action rune) bool {
 	}
 	start := h.searchIndex
 	var candidate string
-	if action == goshKeyActionHistorySearchBackward {
+	if action == keyActionHistorySearchBackward {
 		for idx := start - 1; idx >= 0; idx-- {
 			if strings.HasPrefix(entries[idx], h.searchPrefix) {
 				candidate = entries[idx]
@@ -129,14 +129,14 @@ func (h *goshHistorySearch) applySearch(action rune) bool {
 	return true
 }
 
-func (h *goshHistorySearch) setReadlineBuffer(line []rune, pos int) bool {
+func (h *historySearch) setReadlineBuffer(line []rune, pos int) bool {
 	if h.setBuffer != nil {
 		return h.setBuffer(h.rl, line, pos)
 	}
-	return goshSetReadlineBuffer(h.rl, line, pos)
+	return setReadlineBuffer(h.rl, line, pos)
 }
 
-func goshSetReadlineBuffer(rl *readline.Instance, line []rune, pos int) bool {
+func setReadlineBuffer(rl *readline.Instance, line []rune, pos int) bool {
 	if rl == nil || rl.Operation == nil {
 		return false
 	}
@@ -161,7 +161,7 @@ func goshSetReadlineBuffer(rl *readline.Instance, line []rune, pos int) bool {
 	return true
 }
 
-func (h *goshHistorySearch) currentPrefixLocked() string {
+func (h *historySearch) currentPrefixLocked() string {
 	line := h.line
 	pos := h.pos
 	if pos < 0 {
@@ -172,7 +172,7 @@ func (h *goshHistorySearch) currentPrefixLocked() string {
 	return string(line[:pos])
 }
 
-func (h *goshHistorySearch) emitBell() {
+func (h *historySearch) emitBell() {
 	h.mu.Lock()
 	rl := h.rl
 	h.mu.Unlock()

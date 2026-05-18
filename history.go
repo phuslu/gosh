@@ -16,37 +16,37 @@ import (
 	"mvdan.cc/sh/v3/interp"
 )
 
-type goshHistory struct {
+type history struct {
 	limit   int
-	control goshHistoryControl
+	control historyControl
 	file    string
 	mu      sync.Mutex
 	entries []string
 }
 
-type goshHistoryControl struct {
+type historyControl struct {
 	ignoreDups  bool
 	ignoreSpace bool
 }
 
-func goshResolveHistoryLimit() int {
+func resolveHistoryLimit() int {
 	val, _ := os.LookupEnv("HISTSIZE")
-	if n := goshParseHistoryLimit(val); n > 0 {
+	if n := parseHistoryLimit(val); n > 0 {
 		return n
 	}
 	return 1000
 }
 
-func goshResolveShellHistoryLimit(runner *interp.Runner) int {
-	if val, ok := goshRunnerStringVar(runner, "HISTSIZE"); ok {
-		if n := goshParseHistoryLimit(val); n > 0 {
+func resolveShellHistoryLimit(runner *interp.Runner) int {
+	if val, ok := runnerStringVar(runner, "HISTSIZE"); ok {
+		if n := parseHistoryLimit(val); n > 0 {
 			return n
 		}
 	}
-	return goshResolveHistoryLimit()
+	return resolveHistoryLimit()
 }
 
-func goshParseHistoryLimit(val string) int {
+func parseHistoryLimit(val string) int {
 	n, err := strconv.Atoi(strings.TrimSpace(val))
 	if err != nil || n <= 0 {
 		return 0
@@ -54,15 +54,15 @@ func goshParseHistoryLimit(val string) int {
 	return n
 }
 
-func goshResolveShellHistoryControl(runner *interp.Runner) goshHistoryControl {
-	if val, ok := goshRunnerStringVar(runner, "HISTCONTROL"); ok {
-		return goshParseHistoryControl(val)
+func resolveShellHistoryControl(runner *interp.Runner) historyControl {
+	if val, ok := runnerStringVar(runner, "HISTCONTROL"); ok {
+		return parseHistoryControl(val)
 	}
-	return goshParseHistoryControl(os.Getenv("HISTCONTROL"))
+	return parseHistoryControl(os.Getenv("HISTCONTROL"))
 }
 
-func goshParseHistoryControl(val string) goshHistoryControl {
-	var control goshHistoryControl
+func parseHistoryControl(val string) historyControl {
+	var control historyControl
 	for _, part := range strings.FieldsFunc(val, func(r rune) bool {
 		return r == ':' || r == ',' || unicode.IsSpace(r)
 	}) {
@@ -79,8 +79,8 @@ func goshParseHistoryControl(val string) goshHistoryControl {
 	return control
 }
 
-func goshResolveShellHistoryFile(runner *interp.Runner) string {
-	histFile, ok := goshRunnerStringVar(runner, "HISTFILE")
+func resolveShellHistoryFile(runner *interp.Runner) string {
+	histFile, ok := runnerStringVar(runner, "HISTFILE")
 	if !ok {
 		histFile, ok = os.LookupEnv("HISTFILE")
 	}
@@ -90,7 +90,7 @@ func goshResolveShellHistoryFile(runner *interp.Runner) string {
 	return histFile
 }
 
-func goshRunnerStringVar(runner *interp.Runner, name string) (string, bool) {
+func runnerStringVar(runner *interp.Runner, name string) (string, bool) {
 	if runner != nil && runner.Vars != nil {
 		if vr, ok := runner.Vars[name]; ok && vr.IsSet() {
 			return vr.String(), true
@@ -104,7 +104,7 @@ func goshRunnerStringVar(runner *interp.Runner, name string) (string, bool) {
 	return "", false
 }
 
-func (h *goshHistory) LoadFile(name string) error {
+func (h *history) LoadFile(name string) error {
 	if h == nil || name == "" {
 		return nil
 	}
@@ -119,12 +119,12 @@ func (h *goshHistory) LoadFile(name string) error {
 	return h.Load(file)
 }
 
-func (h *goshHistory) Load(r io.Reader) error {
+func (h *history) Load(r io.Reader) error {
 	br := bufio.NewReader(r)
 	for {
 		line, err := br.ReadString('\n')
 		if line != "" {
-			h.append(goshDecodeHistoryLine(line))
+			h.append(decodeHistoryLine(line))
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -135,7 +135,7 @@ func (h *goshHistory) Load(r io.Reader) error {
 	}
 }
 
-func (h *goshHistory) Add(line string) bool {
+func (h *history) Add(line string) bool {
 	line = strings.TrimRight(line, "\r\n")
 	if strings.TrimSpace(line) == "" {
 		return false
@@ -155,7 +155,7 @@ func (h *goshHistory) Add(line string) bool {
 	return true
 }
 
-func (h *goshHistory) append(line string) {
+func (h *history) append(line string) {
 	line = strings.TrimRight(line, "\r\n")
 	if strings.TrimSpace(line) == "" {
 		return
@@ -165,14 +165,14 @@ func (h *goshHistory) append(line string) {
 	h.appendLocked(line)
 }
 
-func (h *goshHistory) appendLocked(line string) {
+func (h *history) appendLocked(line string) {
 	h.entries = append(h.entries, line)
 	if h.limit > 0 && len(h.entries) > h.limit {
 		h.entries = h.entries[len(h.entries)-h.limit:]
 	}
 }
 
-func (h *goshHistory) Entries() []string {
+func (h *history) Entries() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	out := make([]string, len(h.entries))
@@ -180,7 +180,7 @@ func (h *goshHistory) Entries() []string {
 	return out
 }
 
-func (h *goshHistory) appendFile(line string) {
+func (h *history) appendFile(line string) {
 	if h == nil || h.file == "" {
 		return
 	}
@@ -188,25 +188,25 @@ func (h *goshHistory) appendFile(line string) {
 	if err != nil {
 		return
 	}
-	_, _ = fmt.Fprintln(file, goshEncodeHistoryLine(line))
+	_, _ = fmt.Fprintln(file, encodeHistoryLine(line))
 	_ = file.Close()
 }
 
-const goshHistoryEncodedPrefix = "# gosh-history-v1 "
+const historyEncodedPrefix = "# gosh-history-v1 "
 
-func goshEncodeHistoryLine(line string) string {
-	if strings.ContainsAny(line, "\r\n") || strings.HasPrefix(line, goshHistoryEncodedPrefix) {
-		return goshHistoryEncodedPrefix + base64.StdEncoding.EncodeToString([]byte(line))
+func encodeHistoryLine(line string) string {
+	if strings.ContainsAny(line, "\r\n") || strings.HasPrefix(line, historyEncodedPrefix) {
+		return historyEncodedPrefix + base64.StdEncoding.EncodeToString([]byte(line))
 	}
 	return line
 }
 
-func goshDecodeHistoryLine(line string) string {
+func decodeHistoryLine(line string) string {
 	line = strings.TrimRight(line, "\r\n")
-	if !strings.HasPrefix(line, goshHistoryEncodedPrefix) {
+	if !strings.HasPrefix(line, historyEncodedPrefix) {
 		return line
 	}
-	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(line[len(goshHistoryEncodedPrefix):]))
+	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(line[len(historyEncodedPrefix):]))
 	if err != nil {
 		return line
 	}

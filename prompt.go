@@ -15,15 +15,15 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-func goshDefaultPrompt(version string) string {
+func defaultPrompt(version string) string {
 	symbol := "$"
 	if os.Geteuid() == 0 {
 		symbol = "#"
 	}
-	return "sh-" + goshShortVersion(version) + symbol + " "
+	return "sh-" + shortVersion(version) + symbol + " "
 }
 
-func goshShortVersion(version string) string {
+func shortVersion(version string) string {
 	if len(version) > 3 {
 		return version[:3]
 	}
@@ -33,7 +33,7 @@ func goshShortVersion(version string) string {
 	return version
 }
 
-func goshPromptString(ctx context.Context, runner *interp.Runner, stdin io.Reader, stderr io.Writer, name, fallback string, seq int) goshPromptParts {
+func promptString(ctx context.Context, runner *interp.Runner, stdin io.Reader, stderr io.Writer, name, fallback string, seq int) promptParts {
 	host := "localhost"
 	if h, err := os.Hostname(); err == nil {
 		host = h
@@ -42,7 +42,7 @@ func goshPromptString(ctx context.Context, runner *interp.Runner, stdin io.Reade
 	if idx := strings.IndexByte(host, '.'); idx >= 0 {
 		short = host[:idx]
 	}
-	state := &goshPromptState{
+	state := &promptState{
 		ctx:       ctx,
 		runner:    runner,
 		stdin:     stdin,
@@ -55,22 +55,22 @@ func goshPromptString(ctx context.Context, runner *interp.Runner, stdin io.Reade
 	}
 	val, err := state.runScript(fmt.Sprintf("printf %%s \"${%s-}\"", name))
 	if err != nil || val == "" {
-		return goshPromptParts{prompt: fallback}
+		return promptParts{prompt: fallback}
 	}
-	return goshSplitPromptLines((&goshPromptRenderer{src: val, state: state}).render())
+	return splitPromptLines((&promptRenderer{src: val, state: state}).render())
 }
 
-type goshPromptParts struct {
+type promptParts struct {
 	prefix string
 	prompt string
 }
 
-type goshPromptPrinter struct {
+type promptPrinter struct {
 	mu     sync.RWMutex
 	prefix string
 }
 
-func (p *goshPromptPrinter) Print(w io.Writer, prefix string) {
+func (p *promptPrinter) Print(w io.Writer, prefix string) {
 	p.mu.Lock()
 	p.prefix = prefix
 	p.mu.Unlock()
@@ -80,24 +80,24 @@ func (p *goshPromptPrinter) Print(w io.Writer, prefix string) {
 	fmt.Fprint(w, prefix)
 }
 
-func (p *goshPromptPrinter) Prefix() string {
+func (p *promptPrinter) Prefix() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.prefix
 }
 
-func goshSplitPromptLines(val string) goshPromptParts {
+func splitPromptLines(val string) promptParts {
 	idx := strings.LastIndexByte(val, '\n')
 	if idx < 0 {
-		return goshPromptParts{prompt: val}
+		return promptParts{prompt: val}
 	}
-	return goshPromptParts{
+	return promptParts{
 		prefix: val[:idx+1],
 		prompt: val[idx+1:],
 	}
 }
 
-type goshPromptState struct {
+type promptState struct {
 	ctx       context.Context
 	runner    *interp.Runner
 	stdin     io.Reader
@@ -110,7 +110,7 @@ type goshPromptState struct {
 	now       time.Time
 }
 
-func (p *goshPromptState) shellVar(name string) string {
+func (p *promptState) shellVar(name string) string {
 	if p.vars == nil {
 		p.vars = make(map[string]string)
 	}
@@ -126,7 +126,7 @@ func (p *goshPromptState) shellVar(name string) string {
 	return val
 }
 
-func (p *goshPromptState) user() string {
+func (p *promptState) user() string {
 	if val := p.shellVar("USER"); val != "" {
 		return val
 	}
@@ -136,7 +136,7 @@ func (p *goshPromptState) user() string {
 	return fmt.Sprintf("%d", os.Getuid())
 }
 
-func (p *goshPromptState) home() string {
+func (p *promptState) home() string {
 	if val := p.shellVar("HOME"); val != "" {
 		return val
 	}
@@ -144,7 +144,7 @@ func (p *goshPromptState) home() string {
 	return home
 }
 
-func (p *goshPromptState) pwd() string {
+func (p *promptState) pwd() string {
 	if p.dir == "" {
 		p.dir = p.shellVar("PWD")
 	}
@@ -154,19 +154,19 @@ func (p *goshPromptState) pwd() string {
 	return p.dir
 }
 
-func (p *goshPromptState) promptSymbol() string {
+func (p *promptState) promptSymbol() string {
 	if os.Geteuid() == 0 {
 		return "#"
 	}
 	return "$"
 }
 
-type goshPromptRenderer struct {
+type promptRenderer struct {
 	src   string
-	state *goshPromptState
+	state *promptState
 }
 
-func (r *goshPromptRenderer) render() string {
+func (r *promptRenderer) render() string {
 	var b strings.Builder
 	for i := 0; i < len(r.src); {
 		switch r.src[i] {
@@ -183,7 +183,7 @@ func (r *goshPromptRenderer) render() string {
 					i += 2
 					continue
 				}
-				b.WriteString((&goshPromptRenderer{src: inner, state: r.state}).render())
+				b.WriteString((&promptRenderer{src: inner, state: r.state}).render())
 				i = pos
 				continue
 			}
@@ -211,7 +211,7 @@ func (r *goshPromptRenderer) render() string {
 	return b.String()
 }
 
-func (r *goshPromptRenderer) scanNonPrinting(start int) (string, int) {
+func (r *promptRenderer) scanNonPrinting(start int) (string, int) {
 	for i := start; i < len(r.src)-1; i++ {
 		if r.src[i] == '\\' && r.src[i+1] == ']' {
 			return r.src[start:i], i + 2
@@ -220,7 +220,7 @@ func (r *goshPromptRenderer) scanNonPrinting(start int) (string, int) {
 	return "", -1
 }
 
-func (r *goshPromptRenderer) handleEscape(idx int) (string, int) {
+func (r *promptRenderer) handleEscape(idx int) (string, int) {
 	c := r.src[idx]
 	switch c {
 	case 'a':
@@ -278,7 +278,7 @@ func (r *goshPromptRenderer) handleEscape(idx int) (string, int) {
 	return string(c), idx + 1
 }
 
-func (r *goshPromptRenderer) expandDollar(i int) (string, int) {
+func (r *promptRenderer) expandDollar(i int) (string, int) {
 	if i+1 >= len(r.src) {
 		return "", i
 	}
@@ -313,7 +313,7 @@ func (r *goshPromptRenderer) expandDollar(i int) (string, int) {
 	}
 }
 
-func (r *goshPromptRenderer) scanName(start int) (string, int) {
+func (r *promptRenderer) scanName(start int) (string, int) {
 	if start >= len(r.src) {
 		return "", start
 	}
@@ -336,7 +336,7 @@ func (r *goshPromptRenderer) scanName(start int) (string, int) {
 	return "", start
 }
 
-func (r *goshPromptRenderer) scanDelimited(start int, open, close byte) (string, int, bool) {
+func (r *promptRenderer) scanDelimited(start int, open, close byte) (string, int, bool) {
 	depth := 1
 	for i := start; i < len(r.src); i++ {
 		s := r.src[i]
@@ -395,7 +395,7 @@ func (r *goshPromptRenderer) scanDelimited(start int, open, close byte) (string,
 	return "", len(r.src), false
 }
 
-func (r *goshPromptRenderer) scanArithmetic(start int) (string, int, bool) {
+func (r *promptRenderer) scanArithmetic(start int) (string, int, bool) {
 	body, end, ok := r.scanDelimited(start, '(', ')')
 	if !ok || end >= len(r.src) {
 		return "", len(r.src), false
@@ -403,7 +403,7 @@ func (r *goshPromptRenderer) scanArithmetic(start int) (string, int, bool) {
 	return body, end + 1, true
 }
 
-func (r *goshPromptRenderer) skipArithmetic(start int) (int, bool) {
+func (r *promptRenderer) skipArithmetic(start int) (int, bool) {
 	_, end, ok := r.scanDelimited(start, '(', ')')
 	if !ok || end >= len(r.src) || r.src[end] != ')' {
 		return len(r.src), false
@@ -411,7 +411,7 @@ func (r *goshPromptRenderer) skipArithmetic(start int) (int, bool) {
 	return end + 1, true
 }
 
-func (p *goshPromptState) displayPwd() string {
+func (p *promptState) displayPwd() string {
 	dir := p.pwd()
 	home := p.home()
 	if home != "" {
@@ -429,7 +429,7 @@ func (p *goshPromptState) displayPwd() string {
 	return dir
 }
 
-func (p *goshPromptState) formatTime(layout string) string {
+func (p *promptState) formatTime(layout string) string {
 	var b strings.Builder
 	for i := 0; i < len(layout); i++ {
 		if layout[i] != '%' {
@@ -474,7 +474,7 @@ func (p *goshPromptState) formatTime(layout string) string {
 	return b.String()
 }
 
-func (p *goshPromptState) runCommand(cmd string) string {
+func (p *promptState) runCommand(cmd string) string {
 	out, err := p.runScript(cmd)
 	if err != nil && !IsExitStatus(err) {
 		return ""
@@ -482,7 +482,7 @@ func (p *goshPromptState) runCommand(cmd string) string {
 	return out
 }
 
-func (p *goshPromptState) runParam(expr string) string {
+func (p *promptState) runParam(expr string) string {
 	script := fmt.Sprintf("printf %%s \"%s\"", p.escapeDouble(expr))
 	out, err := p.runScript(script)
 	if err != nil {
@@ -491,7 +491,7 @@ func (p *goshPromptState) runParam(expr string) string {
 	return out
 }
 
-func (p *goshPromptState) runArithmetic(expr string) string {
+func (p *promptState) runArithmetic(expr string) string {
 	script := fmt.Sprintf("printf %%s \"$((%s))\"", p.escapeDouble(expr))
 	out, err := p.runScript(script)
 	if err != nil {
@@ -500,11 +500,11 @@ func (p *goshPromptState) runArithmetic(expr string) string {
 	return out
 }
 
-func (p *goshPromptState) runScript(script string) (string, error) {
-	return goshRunSubshell(p.ctx, p.runner, p.stdin, p.stderr, script)
+func (p *promptState) runScript(script string) (string, error) {
+	return runSubshell(p.ctx, p.runner, p.stdin, p.stderr, script)
 }
 
-func goshRunSubshell(ctx context.Context, runner *interp.Runner, stdin io.Reader, stderr io.Writer, script string) (string, error) {
+func runSubshell(ctx context.Context, runner *interp.Runner, stdin io.Reader, stderr io.Writer, script string) (string, error) {
 	prog, err := syntax.NewParser().Parse(strings.NewReader(script), "")
 	if err != nil {
 		return "", err
@@ -518,7 +518,7 @@ func goshRunSubshell(ctx context.Context, runner *interp.Runner, stdin io.Reader
 	return strings.TrimRight(buf.String(), "\n"), nil
 }
 
-func (p *goshPromptState) escapeDouble(s string) string {
+func (p *promptState) escapeDouble(s string) string {
 	s = strings.ReplaceAll(s, "\\", "\\\\")
 	s = strings.ReplaceAll(s, "\"", "\\\"")
 	return s
