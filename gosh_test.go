@@ -137,7 +137,7 @@ func TestBindParser(t *testing.T) {
 	}
 }
 
-func TestHistorySearchMovesCursorToEndOfMatch(t *testing.T) {
+func TestHistorySearchKeepsCursorAtSearchPosition(t *testing.T) {
 	const long = `sed -i -E 's/const bufWriterPoolBufferSize = .+/var bufWriterPoolBufferSize = func() int { n, _ := strconv.Atoi(os.Getenv("HTTP2_WRITER_POOL_BUFFER_SIZE")); return max(n, 32768) }()/' /Users/xiangyu.lu/go/pkg/mod/golang.org/x/net@v0.54.0/http2/http2.go`
 	const short = `sed -n '1p' http2.go`
 
@@ -165,8 +165,8 @@ func TestHistorySearchMovesCursorToEndOfMatch(t *testing.T) {
 	if got := string(gotLine); got != long {
 		t.Fatalf("first match = %q, want %q", got, long)
 	}
-	if gotPos != len([]rune(long)) {
-		t.Fatalf("first cursor position = %d, want %d", gotPos, len([]rune(long)))
+	if gotPos != len([]rune("sed")) {
+		t.Fatalf("first cursor position = %d, want %d", gotPos, len([]rune("sed")))
 	}
 
 	if !search.applySearch(keyActionHistorySearchBackward) {
@@ -175,8 +175,19 @@ func TestHistorySearchMovesCursorToEndOfMatch(t *testing.T) {
 	if got := string(gotLine); got != short {
 		t.Fatalf("second match = %q, want %q", got, short)
 	}
-	if gotPos != len([]rune(short)) {
-		t.Fatalf("second cursor position = %d, want %d", gotPos, len([]rune(short)))
+	if gotPos != len([]rune("sed")) {
+		t.Fatalf("second cursor position = %d, want %d", gotPos, len([]rune("sed")))
+	}
+}
+
+func TestHistorySearchCursorMoveUsesAbsolutePositioning(t *testing.T) {
+	line := []rune(strings.Repeat("a", 160))
+	got := string(cursorMoveFromEndSequence(2, line, 3, 80))
+	if want := "\x1b[2A\r\x1b[5C"; got != want {
+		t.Fatalf("cursor move sequence = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "\b") {
+		t.Fatalf("cursor move sequence should not use backspace: %q", got)
 	}
 }
 

@@ -1,6 +1,8 @@
 package gosh
 
 import (
+	"bytes"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -18,6 +20,8 @@ type historySearch struct {
 	pos          int
 	searchActive bool
 	searchPrefix string
+	searchPos    int
+	searchEmpty  bool
 	searchIndex  int
 	historySize  int
 	setBuffer    func(*readline.Instance, []rune, int) bool
@@ -60,6 +64,8 @@ func (h *historySearch) resetSearch() {
 func (h *historySearch) resetSearchLocked() {
 	h.searchActive = false
 	h.searchPrefix = ""
+	h.searchPos = 0
+	h.searchEmpty = false
 	h.historySize = 0
 	h.searchIndex = -1
 }
@@ -73,6 +79,8 @@ func (h *historySearch) applySearch(action rune) bool {
 	entries := h.history.Entries()
 	if !h.searchActive || len(entries) != h.historySize {
 		h.searchPrefix = h.currentPrefixLocked()
+		h.searchPos = h.pos
+		h.searchEmpty = h.searchPos == 0 && h.searchPrefix == "" && len(h.line) == 0
 		h.searchActive = true
 		h.historySize = len(entries)
 		if action == keyActionHistorySearchBackward {
@@ -107,7 +115,14 @@ func (h *historySearch) applySearch(action rune) bool {
 		return false
 	}
 	runes := []rune(candidate)
-	pos := len(runes)
+	pos := h.searchPos
+	if h.searchEmpty {
+		pos = len(runes)
+	} else if pos < 0 {
+		pos = 0
+	} else if pos > len(runes) {
+		pos = len(runes)
+	}
 	if !h.setReadlineBuffer(runes, pos) {
 		return false
 	}
@@ -144,8 +159,96 @@ func setReadlineBuffer(rl *readline.Instance, line []rune, pos int) bool {
 	if !ok || buf == nil {
 		return false
 	}
-	buf.SetWithIdx(pos, append([]rune(nil), line...))
+	line = append([]rune(nil), line...)
+	if pos == len(line) || !readlineBufferInteractive(buf) {
+		buf.SetWithIdx(pos, line)
+		return true
+	}
+	width := readlineBufferWidth(buf)
+	if width <= 0 {
+		buf.SetWithIdx(pos, line)
+		return true
+	}
+	// chzyer/readline moves back from the end with one backspace per rune.
+	// Across wrapped long lines that can overrun on some terminals, so draw the
+	// full match at the end and then reposition by row and column.
+	promptWidth := buf.PromptLen()
+	buf.SetWithIdx(len(line), line)
+	if seq := cursorMoveFromEndSequence(promptWidth, line, pos, width); len(seq) > 0 && rl.Terminal != nil {
+		_, _ = rl.Terminal.Write(seq)
+	}
+	buf.Lock()
+	ok = setReadlineBufferIndexLocked(buf, pos)
+	buf.Unlock()
+	if !ok {
+		buf.SetWithIdx(pos, line)
+	}
 	return true
+}
+
+func readlineBufferInteractive(buf *readline.RuneBuffer) bool {
+	v := reflect.ValueOf(buf)
+	if !v.IsValid() || v.Kind() != reflect.Pointer || v.IsNil() {
+		return false
+	}
+	field := v.Elem().FieldByName("interactive")
+	return field.IsValid() && field.Kind() == reflect.Bool && field.Bool()
+}
+
+func readlineBufferWidth(buf *readline.RuneBuffer) int {
+	v := reflect.ValueOf(buf)
+	if !v.IsValid() || v.Kind() != reflect.Pointer || v.IsNil() {
+		return 0
+	}
+	field := v.Elem().FieldByName("width")
+	if !field.IsValid() || field.Kind() != reflect.Int {
+		return 0
+	}
+	return int(field.Int())
+}
+
+func setReadlineBufferIndexLocked(buf *readline.RuneBuffer, pos int) bool {
+	v := reflect.ValueOf(buf)
+	if !v.IsValid() || v.Kind() != reflect.Pointer || v.IsNil() {
+		return false
+	}
+	field := v.Elem().FieldByName("idx")
+	if !field.IsValid() || !field.CanAddr() || field.Kind() != reflect.Int {
+		return false
+	}
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().SetInt(int64(pos))
+	return true
+}
+
+func cursorMoveFromEndSequence(promptWidth int, line []rune, pos, width int) []byte {
+	if width <= 0 || pos >= len(line) {
+		return nil
+	}
+	if pos < 0 {
+		pos = 0
+	}
+	runes := readline.Runes{}
+	targetRow, targetCol := terminalRowCol(promptWidth+runes.WidthAll(line[:pos]), width)
+	endRow, _ := terminalRowCol(promptWidth+runes.WidthAll(line), width)
+	if endRow < targetRow {
+		return nil
+	}
+	var buf bytes.Buffer
+	if rows := endRow - targetRow; rows > 0 {
+		fmt.Fprintf(&buf, "\x1b[%dA", rows)
+	}
+	buf.WriteByte('\r')
+	if targetCol > 0 {
+		fmt.Fprintf(&buf, "\x1b[%dC", targetCol)
+	}
+	return buf.Bytes()
+}
+
+func terminalRowCol(cells, width int) (int, int) {
+	if width <= 0 {
+		return 0, cells
+	}
+	return cells / width, cells % width
 }
 
 func (h *historySearch) currentPrefixLocked() string {
