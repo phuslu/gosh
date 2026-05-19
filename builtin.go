@@ -40,9 +40,9 @@ func callHandler(runner func() *interp.Runner, history *history, bindings *keyBi
 			if r != nil && r.Funcs[args[0]] != nil {
 				return args, nil
 			}
-			if shoptArgsHaveQuiet(args[1:]) {
+			if shouldHandleShopt(args[1:]) {
 				next := make([]string, 1, len(args))
-				next[0] = shoptQuietCommand
+				next[0] = shoptCommand
 				next = append(next, args[1:]...)
 				return next, nil
 			}
@@ -54,9 +54,9 @@ func callHandler(runner func() *interp.Runner, history *history, bindings *keyBi
 			if r != nil && r.Funcs[args[0]] != nil {
 				return args, nil
 			}
-			if len(args) >= 2 && args[1] == "shopt" && shoptArgsHaveQuiet(args[2:]) {
+			if len(args) >= 2 && args[1] == "shopt" && shouldHandleShopt(args[2:]) {
 				next := make([]string, 1, len(args)-1)
-				next[0] = shoptQuietCommand
+				next[0] = shoptCommand
 				next = append(next, args[2:]...)
 				return next, nil
 			}
@@ -73,9 +73,9 @@ func callHandler(runner func() *interp.Runner, history *history, bindings *keyBi
 			if r != nil && r.Funcs[args[0]] != nil {
 				return args, nil
 			}
-			if shoptArgs, ok := commandShoptQuietArgs(args[1:]); ok {
+			if shoptArgs, ok := commandShoptArgs(args[1:]); ok {
 				next := make([]string, 1, len(shoptArgs)+1)
-				next[0] = shoptQuietCommand
+				next[0] = shoptCommand
 				next = append(next, shoptArgs...)
 				return next, nil
 			}

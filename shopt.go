@@ -7,7 +7,7 @@ import (
 	"mvdan.cc/sh/v3/interp"
 )
 
-const shoptQuietCommand = "__gosh_shopt_quiet"
+const shoptCommand = "__gosh_shopt"
 
 // These tables mirror mvdan.cc/sh's internal shopt option order, because the
 // corresponding option states are only exposed as an unexported bool slice.
@@ -136,23 +136,33 @@ func (p *shoptFlagParser) args() []string {
 func execHandler(runner func() *interp.Runner) func(interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 	return func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 		return func(ctx context.Context, args []string) error {
-			if len(args) > 0 && args[0] == shoptQuietCommand {
+			if len(args) > 0 && args[0] == shoptCommand {
 				var r *interp.Runner
 				if runner != nil {
 					r = runner()
 				}
-				return runShoptQuiet(ctx, r, args[1:])
+				return runShopt(ctx, r, args[1:])
 			}
 			return next(ctx, args)
 		}
 	}
 }
 
-func shoptArgsHaveQuiet(args []string) bool {
-	return parseShoptArgs(args).quiet
+func shouldHandleShopt(args []string) bool {
+	parsed := parseShoptArgs(args)
+	if parsed.quiet {
+		return true
+	}
+	if parsed.unsupported != "" || parsed.invalid != "" || parsed.posix {
+		return false
+	}
+	if len(parsed.args) == 0 {
+		return true
+	}
+	return shoptArgsHaveManagedOption(parsed.args)
 }
 
-func commandShoptQuietArgs(args []string) ([]string, bool) {
+func commandShoptArgs(args []string) ([]string, bool) {
 	fp := shoptFlagParser{remaining: args}
 	show := false
 	for fp.more() {
@@ -167,7 +177,7 @@ func commandShoptQuietArgs(args []string) ([]string, bool) {
 		return nil, false
 	}
 	rest := fp.args()
-	if len(rest) == 0 || rest[0] != "shopt" || !shoptArgsHaveQuiet(rest[1:]) {
+	if len(rest) == 0 || rest[0] != "shopt" || !shouldHandleShopt(rest[1:]) {
 		return nil, false
 	}
 	return rest[1:], true
@@ -202,7 +212,7 @@ func parseShoptArgs(args []string) shoptArgs {
 	return parsed
 }
 
-func runShoptQuiet(ctx context.Context, runner *interp.Runner, args []string) error {
+func runShopt(ctx context.Context, runner *interp.Runner, args []string) error {
 	hc := interp.HandlerCtx(ctx)
 	parsed := parseShoptArgs(args)
 	if parsed.unsupported != "" {
@@ -213,16 +223,19 @@ func runShoptQuiet(ctx context.Context, runner *interp.Runner, args []string) er
 		fmt.Fprintf(hc.Stderr, "shopt: invalid option %q\n", parsed.invalid)
 		return interp.ExitStatus(2)
 	}
-	if !parsed.quiet {
-		next := append([]string{"shopt"}, args...)
+	if parsed.mode != "" && (parsed.posix || !shoptArgsHaveManagedOption(parsed.args)) {
+		next := append([]string{"shopt"}, parsed.forward...)
 		return hc.Builtin(ctx, next)
 	}
 	if parsed.mode != "" {
-		if len(parsed.args) == 0 {
+		return setShoptOptions(ctx, runner, parsed)
+	}
+	if len(parsed.args) == 0 {
+		if parsed.quiet {
 			return nil
 		}
-		next := append([]string{"shopt"}, parsed.forward...)
-		return hc.Builtin(ctx, next)
+		printShoptOptions(hc.Stdout, runner, parsed.posix)
+		return nil
 	}
 	for _, arg := range parsed.args {
 		enabled, ok := shoptOptionEnabled(runner, parsed.posix, arg)
@@ -230,34 +243,130 @@ func runShoptQuiet(ctx context.Context, runner *interp.Runner, args []string) er
 			fmt.Fprintf(hc.Stderr, "shopt: invalid option name %q\n", arg)
 			return interp.ExitStatus(1)
 		}
-		if !enabled {
+		if parsed.quiet {
+			if !enabled {
+				return interp.ExitStatus(1)
+			}
+			continue
+		}
+		printShoptOption(hc.Stdout, runner, parsed.posix, arg)
+	}
+	return nil
+}
+
+func setShoptOptions(ctx context.Context, runner *interp.Runner, parsed shoptArgs) error {
+	hc := interp.HandlerCtx(ctx)
+	for _, arg := range parsed.args {
+		opt, supported, managed := shoptOption(runner, parsed.posix, arg)
+		if opt == nil {
+			fmt.Fprintf(hc.Stderr, "shopt: invalid option name %q\n", arg)
 			return interp.ExitStatus(1)
+		}
+		if !supported {
+			fmt.Fprintf(hc.Stderr, "shopt: unsupported option %q\n", arg)
+			return interp.ExitStatus(1)
+		}
+		if managed {
+			*opt = parsed.mode == "-s"
+			continue
+		}
+		if err := hc.Builtin(ctx, []string{"shopt", parsed.mode, arg}); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
 func shoptOptionEnabled(runner *interp.Runner, posix bool, name string) (bool, bool) {
+	opt, _, _ := shoptOption(runner, posix, name)
+	if opt == nil {
+		return false, false
+	}
+	return *opt, true
+}
+
+func shoptOption(runner *interp.Runner, posix bool, name string) (*bool, bool, bool) {
 	opts := runnerOpts(runner)
 	if posix {
 		for i, opt := range shoptPosixOptionNames {
 			if opt == name {
 				if i >= len(opts) {
-					return false, false
+					return nil, false, false
 				}
-				return opts[i], true
+				return &opts[i], true, false
 			}
 		}
-		return false, false
+		return nil, false, false
 	}
 	for i, opt := range shoptBashOptionNames {
 		if opt == name {
 			index := len(shoptPosixOptionNames) + i
 			if index >= len(opts) {
-				return false, false
+				return nil, false, false
 			}
-			return opts[index], true
+			managed := shoptManagedOption(opt)
+			supported := managed || shoptBuiltinSupportedOption(opt)
+			return &opts[index], supported, managed
 		}
 	}
-	return false, false
+	return nil, false, false
+}
+
+func shoptArgsHaveManagedOption(args []string) bool {
+	for _, arg := range args {
+		if shoptManagedOption(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func shoptManagedOption(name string) bool {
+	switch name {
+	case "checkwinsize":
+		return true
+	}
+	return false
+}
+
+func shoptBuiltinSupportedOption(name string) bool {
+	switch name {
+	case "dotglob", "expand_aliases", "extglob", "globstar", "nocaseglob", "nullglob":
+		return true
+	}
+	return false
+}
+
+func printShoptOptions(w interface {
+	Write([]byte) (int, error)
+}, runner *interp.Runner, posix bool) {
+	names := shoptBashOptionNames
+	if posix {
+		names = shoptPosixOptionNames
+	}
+	for _, name := range names {
+		printShoptOption(w, runner, posix, name)
+	}
+}
+
+func printShoptOption(w interface {
+	Write([]byte) (int, error)
+}, runner *interp.Runner, posix bool, name string) {
+	opt, supported, _ := shoptOption(runner, posix, name)
+	if opt == nil {
+		return
+	}
+	state := "off"
+	if *opt {
+		state = "on"
+	}
+	if supported {
+		fmt.Fprintf(w, "%s\t%s\n", name, state)
+		return
+	}
+	unsupported := "on"
+	if *opt {
+		unsupported = "off"
+	}
+	fmt.Fprintf(w, "%s\t%s\t(%q not supported)\n", name, state, unsupported)
 }

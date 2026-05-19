@@ -83,6 +83,15 @@ func Run(c Config) error {
 	if c.IsTerminal && c.EnableVirtualTerminal != nil {
 		_ = c.EnableVirtualTerminal(true, false, false)
 	}
+	getScreenWidth := func() int {
+		return readline.GetScreenWidth()
+	}
+	readlineWidth := func() int {
+		if w := getScreenWidth(); w > 0 {
+			return w
+		}
+		return 80
+	}
 
 	opts := []interp.RunnerOption{
 		interp.Interactive(true),
@@ -162,6 +171,7 @@ func Run(c Config) error {
 		return runNonInteractiveStream(ctx, stdin, runner, stdout, stderr)
 	}
 
+	updateCheckwinsizeColumns(runner, getScreenWidth)
 	promptFallback := defaultPrompt(version)
 	promptSeq := 1
 	currentPrompt := promptString(ctx, runner, stdin, stderr, "PS1", promptFallback, promptSeq)
@@ -192,10 +202,7 @@ func Run(c Config) error {
 		AutoComplete:           completer,
 		Listener:               historySearch,
 		FuncGetWidth: func() int {
-			if w := readline.GetScreenWidth(); w > 0 {
-				return w
-			}
-			return 80
+			return readlineWidth()
 		},
 	})
 	if err != nil {
@@ -226,6 +233,7 @@ func Run(c Config) error {
 			// Windows consoles may lose VT mode after programs exit.
 			_ = c.EnableVirtualTerminal(true, false, false)
 		}
+		updateCheckwinsizeColumns(runner, getScreenWidth)
 		setPrompt(promptString(ctx, runner, stdin, stderr, "PS1", defaultPrompt(version), promptSeq))
 		promptSeq++
 		flushPrefix()

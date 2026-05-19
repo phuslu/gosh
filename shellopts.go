@@ -2,6 +2,7 @@ package gosh
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"unsafe"
 
@@ -106,4 +107,42 @@ func runnerOpts(r *interp.Runner) []bool {
 	}
 	ptr := unsafe.Pointer(val.UnsafeAddr())
 	return unsafe.Slice((*bool)(ptr), val.Len())
+}
+
+func updateCheckwinsizeColumns(runner *interp.Runner, width func() int) {
+	enabled, ok := shoptOptionEnabled(runner, false, "checkwinsize")
+	if !ok || !enabled || width == nil {
+		return
+	}
+	cols := width()
+	if cols <= 0 {
+		return
+	}
+	setRunnerStringVar(runner, "COLUMNS", strconv.Itoa(cols))
+}
+
+func setRunnerStringVar(runner *interp.Runner, name, value string) {
+	if runner == nil {
+		return
+	}
+	vr := expand.Variable{Set: true, Kind: expand.String, Str: value}
+	if wenv := runnerWriteEnv(runner); wenv != nil {
+		_ = wenv.Set(name, vr)
+	}
+	if runner.Vars == nil {
+		runner.Vars = make(map[string]expand.Variable)
+	}
+	runner.Vars[name] = vr
+}
+
+func runnerWriteEnv(r *interp.Runner) expand.WriteEnviron {
+	if r == nil {
+		return nil
+	}
+	val := reflect.ValueOf(r).Elem().FieldByName("writeEnv")
+	if !val.IsValid() || !val.CanAddr() {
+		return nil
+	}
+	ptr := unsafe.Pointer(val.UnsafeAddr())
+	return *(*expand.WriteEnviron)(ptr)
 }

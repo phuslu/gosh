@@ -415,6 +415,44 @@ func TestShoptQuiet(t *testing.T) {
 	}
 }
 
+func TestShoptCheckwinsize(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args: []string{"gosh", "-c", `
+			if shopt -q checkwinsize; then echo default-on; else echo bad-default; fi
+			shopt -u checkwinsize
+			if shopt -q checkwinsize; then echo bad-unset; else echo unset; fi
+			shopt -s checkwinsize
+			if shopt -q checkwinsize; then echo set; else echo bad-set; fi
+			builtin shopt -u checkwinsize
+			if command shopt -q checkwinsize; then echo bad-command-query; else echo command-query-unset; fi
+			command shopt -s checkwinsize
+			shopt checkwinsize
+		`},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Env:     testEnv(t),
+		Version: "1.2.3",
+	})
+	if err != nil {
+		t.Fatalf("Run checkwinsize shopt failed: %v\nstderr: %s", err, stderr.String())
+	}
+	want := strings.Join([]string{
+		"default-on",
+		"unset",
+		"set",
+		"command-query-unset",
+		"checkwinsize\ton",
+		"",
+	}, "\n")
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout = %q, want %q\nstderr: %s", got, want, stderr.String())
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
 func TestPrintfDashDash(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := Run(Config{
