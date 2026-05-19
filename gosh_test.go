@@ -453,6 +453,41 @@ func TestShoptCheckwinsize(t *testing.T) {
 	}
 }
 
+func TestShoptFailglob(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args: []string{"gosh", "-c", `
+			if shopt -q failglob; then echo bad-default; else echo default-off; fi
+			shopt -s failglob
+			if shopt -q failglob; then echo set; else echo bad-set; fi
+			shopt -u failglob
+			if shopt -q failglob; then echo bad-unset; else echo unset; fi
+			shopt -s failglob
+			shopt failglob
+		`},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Env:     testEnv(t),
+		Version: "1.2.3",
+	})
+	if err != nil {
+		t.Fatalf("Run failglob shopt failed: %v\nstderr: %s", err, stderr.String())
+	}
+	want := strings.Join([]string{
+		"default-off",
+		"set",
+		"unset",
+		"failglob\ton",
+		"",
+	}, "\n")
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout = %q, want %q\nstderr: %s", got, want, stderr.String())
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
 func TestPrintfDashDash(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := Run(Config{

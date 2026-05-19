@@ -323,7 +323,7 @@ func shoptArgsHaveManagedOption(args []string) bool {
 
 func shoptManagedOption(name string) bool {
 	switch name {
-	case "checkwinsize":
+	case "checkwinsize", "failglob":
 		return true
 	}
 	return false
