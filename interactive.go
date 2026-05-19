@@ -100,6 +100,9 @@ func parseNextStatements(data []byte, offset int) ([]*syntax.Stmt, int, error) {
 			return false
 		})
 		if err != nil {
+			if parser.Incomplete() || next < len(data) {
+				continue
+			}
 			return nil, next, err
 		}
 		if !parser.Incomplete() {

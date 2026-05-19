@@ -112,6 +112,26 @@ func TestRunNonInteractiveDoesNotSourceInitOrRenderPrompt(t *testing.T) {
 	}
 }
 
+func TestRunNonInteractiveQuotedNewline(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args:   []string{"gosh"},
+		Stdin:  strings.NewReader("printf \"hello \n\"\n"),
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Env:    testEnv(t),
+	})
+	if err != nil {
+		t.Fatalf("Run quoted newline failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got, want := stdout.String(), "hello \n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
 func TestExitCode(t *testing.T) {
 	if got := ExitCode(nil); got != 0 {
 		t.Fatalf("ExitCode(nil) = %d, want 0", got)
