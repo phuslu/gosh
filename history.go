@@ -17,11 +17,13 @@ import (
 )
 
 type history struct {
-	limit   int
-	control historyControl
-	file    string
-	mu      sync.Mutex
-	entries []string
+	limit       int
+	control     historyControl
+	file        string
+	appendOnAdd func() bool
+	mu          sync.Mutex
+	entries     []string
+	dirtyFile   bool
 }
 
 type historyControl struct {
@@ -150,8 +152,14 @@ func (h *history) Add(line string) bool {
 		return false
 	}
 	h.appendLocked(line)
+	appendNow := h.shouldAppendOnAdd()
+	if !appendNow {
+		h.dirtyFile = true
+	}
 	h.mu.Unlock()
-	h.appendFile(line)
+	if appendNow {
+		h.appendFile(line)
+	}
 	return true
 }
 
@@ -190,6 +198,46 @@ func (h *history) appendFile(line string) {
 	}
 	_, _ = fmt.Fprintln(file, encodeHistoryLine(line))
 	_ = file.Close()
+}
+
+func (h *history) shouldAppendOnAdd() bool {
+	if h == nil || h.appendOnAdd == nil {
+		return true
+	}
+	return h.appendOnAdd()
+}
+
+func (h *history) fileDirty() bool {
+	if h == nil {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.dirtyFile
+}
+
+func (h *history) RewriteFile() error {
+	if h == nil || h.file == "" {
+		return nil
+	}
+	entries := h.Entries()
+	file, err := os.OpenFile(h.file, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o666)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if _, err := fmt.Fprintln(file, encodeHistoryLine(entry)); err != nil {
+			file.Close()
+			return err
+		}
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	h.mu.Lock()
+	h.dirtyFile = false
+	h.mu.Unlock()
+	return nil
 }
 
 const historyEncodedPrefix = "# gosh-history-v1 "

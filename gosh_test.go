@@ -189,6 +189,45 @@ func TestHistoryEncodingAndControl(t *testing.T) {
 	}
 }
 
+func TestHistoryHistappendRewrite(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "history")
+	if err := os.WriteFile(file, []byte("echo old\n"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+
+	history := &history{
+		limit:       10,
+		file:        file,
+		appendOnAdd: func() bool { return false },
+	}
+	if err := history.LoadFile(file); err != nil {
+		t.Fatal(err)
+	}
+	if !history.Add("echo new") {
+		t.Fatalf("history did not save new entry")
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), "echo old\n"; got != want {
+		t.Fatalf("history file before rewrite = %q, want %q", got, want)
+	}
+	if !history.fileDirty() {
+		t.Fatalf("history file was not marked dirty")
+	}
+	if err := history.RewriteFile(); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), "echo old\necho new\n"; got != want {
+		t.Fatalf("history file after rewrite = %q, want %q", got, want)
+	}
+}
+
 func TestBindParser(t *testing.T) {
 	key, action, err := parseBindArgs([]string{`"\e[A": history-search-backward`})
 	if err != nil {
@@ -478,6 +517,41 @@ func TestShoptFailglob(t *testing.T) {
 		"set",
 		"unset",
 		"failglob\ton",
+		"",
+	}, "\n")
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout = %q, want %q\nstderr: %s", got, want, stderr.String())
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestShoptHistappend(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args: []string{"gosh", "-c", `
+			if shopt -q histappend; then echo bad-default; else echo default-off; fi
+			shopt -s histappend
+			if shopt -q histappend; then echo set; else echo bad-set; fi
+			shopt -u histappend
+			if shopt -q histappend; then echo bad-unset; else echo unset; fi
+			shopt -s histappend
+			shopt histappend
+		`},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Env:     testEnv(t),
+		Version: "1.2.3",
+	})
+	if err != nil {
+		t.Fatalf("Run histappend shopt failed: %v\nstderr: %s", err, stderr.String())
+	}
+	want := strings.Join([]string{
+		"default-off",
+		"set",
+		"unset",
+		"histappend\ton",
 		"",
 	}, "\n")
 	if got := stdout.String(); got != want {

@@ -182,6 +182,10 @@ func Run(c Config) error {
 	history.control = resolveShellHistoryControl(runner)
 	histFile := resolveShellHistoryFile(runner)
 	history.file = histFile
+	history.appendOnAdd = func() bool {
+		enabled, _ := shoptOptionEnabled(runner, false, "histappend")
+		return enabled
+	}
 
 	conWriter := ptyNewConsoleANSIWriter(stderr)
 	boundStdin := &keyBindingInput{src: stdin, mgr: bindings}
@@ -245,7 +249,7 @@ func Run(c Config) error {
 	// incomplete statement. Ctrl-D / EOF returns io.EOF to end the session.
 	rdr := &reader{rl: rl, history: history}
 
-	return runInteractiveParser(parser, rdr, func(stmts []*syntax.Stmt) bool {
+	err = runInteractiveParser(parser, rdr, func(stmts []*syntax.Stmt) bool {
 		// parser.Incomplete() returns true when the parser has consumed a
 		// partial statement and is waiting for more input (e.g. open quotes,
 		// unclosed if/for blocks). Switch to the continuation prompt and keep
@@ -280,4 +284,8 @@ func Run(c Config) error {
 		resetPrompt()
 		return true
 	})
+	if history.fileDirty() {
+		_ = history.RewriteFile()
+	}
+	return err
 }
