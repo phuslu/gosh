@@ -329,6 +329,9 @@ func TestCompletionHelpers(t *testing.T) {
 	if got, want := longestCommonPrefix([]string{"alpha", "alpine"}), "alp"; got != want {
 		t.Fatalf("longest common prefix = %q, want %q", got, want)
 	}
+	if got, want := hostCandidatesFrom("alice@lo", []string{"localhost", "logs", "remote"}), []string{"alice@localhost", "alice@logs"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("host candidates = %#v, want %#v", got, want)
+	}
 	expanded, ok := expandTilde("~/src", "/home/tester")
 	if !ok || expanded != filepath.Join("/home/tester", "src") {
 		t.Fatalf("expandTilde = %q, %v", expanded, ok)
@@ -552,6 +555,40 @@ func TestShoptHistappend(t *testing.T) {
 		"set",
 		"unset",
 		"histappend\ton",
+		"",
+	}, "\n")
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout = %q, want %q\nstderr: %s", got, want, stderr.String())
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestShoptHostcomplete(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args: []string{"gosh", "-c", `
+			if shopt -q hostcomplete; then echo default-on; else echo bad-default; fi
+			shopt -u hostcomplete
+			if shopt -q hostcomplete; then echo bad-unset; else echo unset; fi
+			shopt -s hostcomplete
+			if shopt -q hostcomplete; then echo set; else echo bad-set; fi
+			shopt hostcomplete
+		`},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Env:     testEnv(t),
+		Version: "1.2.3",
+	})
+	if err != nil {
+		t.Fatalf("Run hostcomplete shopt failed: %v\nstderr: %s", err, stderr.String())
+	}
+	want := strings.Join([]string{
+		"default-on",
+		"unset",
+		"set",
+		"hostcomplete\ton",
 		"",
 	}, "\n")
 	if got := stdout.String(); got != want {

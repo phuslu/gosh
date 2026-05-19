@@ -285,6 +285,11 @@ func shoptOptionEnabled(runner *interp.Runner, posix bool, name string) (bool, b
 	return *opt, true
 }
 
+func shoptEnabled(runner *interp.Runner, name string) bool {
+	enabled, ok := shoptOptionEnabled(runner, false, name)
+	return ok && enabled
+}
+
 func shoptOption(runner *interp.Runner, posix bool, name string) (*bool, bool, bool) {
 	opts := runnerOpts(runner)
 	if posix {
@@ -323,7 +328,7 @@ func shoptArgsHaveManagedOption(args []string) bool {
 
 func shoptManagedOption(name string) bool {
 	switch name {
-	case "checkwinsize", "failglob", "histappend":
+	case "checkwinsize", "failglob", "histappend", "hostcomplete":
 		return true
 	}
 	return false

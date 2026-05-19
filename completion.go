@@ -46,9 +46,12 @@ func (c *autoCompleter) attach(rl *readline.Instance) {
 func (c *autoCompleter) Do(line []rune, pos int) ([][]rune, int) {
 	ctx := c.completionContext(line, pos)
 	var options []string
-	if ctx.isCommand && !strings.ContainsAny(ctx.prefix, "/\\") {
+	if !ctx.isCommand && shoptEnabled(c.runner, "hostcomplete") {
+		options = c.hostCandidates(ctx.prefix)
+	}
+	if len(options) == 0 && ctx.isCommand && !strings.ContainsAny(ctx.prefix, "/\\") {
 		options = c.commandCandidates(ctx.prefix)
-	} else {
+	} else if len(options) == 0 {
 		onlyDirs := !ctx.isCommand && strings.EqualFold(ctx.command, "cd")
 		options = c.pathCandidates(ctx.prefix, onlyDirs)
 	}
@@ -256,6 +259,67 @@ func (c *autoCompleter) commandCandidates(prefix string) []string {
 		}
 	}
 	return matches
+}
+
+func (c *autoCompleter) hostCandidates(prefix string) []string {
+	return hostCandidatesFrom(prefix, systemHostNames())
+}
+
+func hostCandidatesFrom(prefix string, hosts []string) []string {
+	at := strings.LastIndex(prefix, "@")
+	if at < 0 || at == len(prefix)-1 {
+		return nil
+	}
+	hostPrefix := prefix[:at+1]
+	hostPart := prefix[at+1:]
+	if strings.ContainsAny(hostPart, `/\`) {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	matches := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		if !strings.HasPrefix(host, hostPart) {
+			continue
+		}
+		candidate := hostPrefix + host
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		matches = append(matches, candidate)
+	}
+	slices.Sort(matches)
+	return matches
+}
+
+func systemHostNames() []string {
+	data, err := os.ReadFile("/etc/hosts")
+	if err != nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var hosts []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if before, _, ok := strings.Cut(line, "#"); ok {
+			line = before
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		for _, host := range fields[1:] {
+			if host == "" || strings.ContainsAny(host, " \t/\\") {
+				continue
+			}
+			if _, ok := seen[host]; ok {
+				continue
+			}
+			seen[host] = struct{}{}
+			hosts = append(hosts, host)
+		}
+	}
+	slices.Sort(hosts)
+	return hosts
 }
 
 func (c *autoCompleter) commandIndex(path, pathExt, funcStamp, home string) []string {
