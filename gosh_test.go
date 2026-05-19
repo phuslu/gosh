@@ -599,6 +599,40 @@ func TestShoptHostcomplete(t *testing.T) {
 	}
 }
 
+func TestShoptProgcomp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args: []string{"gosh", "-c", `
+			if shopt -q progcomp; then echo default-on; else echo bad-default; fi
+			shopt -u progcomp
+			if shopt -q progcomp; then echo bad-unset; else echo unset; fi
+			shopt -s progcomp
+			if shopt -q progcomp; then echo set; else echo bad-set; fi
+			shopt progcomp
+		`},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Env:     testEnv(t),
+		Version: "1.2.3",
+	})
+	if err != nil {
+		t.Fatalf("Run progcomp shopt failed: %v\nstderr: %s", err, stderr.String())
+	}
+	want := strings.Join([]string{
+		"default-on",
+		"unset",
+		"set",
+		"progcomp\ton",
+		"",
+	}, "\n")
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout = %q, want %q\nstderr: %s", got, want, stderr.String())
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
 func TestPrintfDashDash(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := Run(Config{
