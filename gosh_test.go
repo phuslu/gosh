@@ -60,6 +60,58 @@ func TestRunNonInteractiveStdin(t *testing.T) {
 	}
 }
 
+func TestRunCommandDoesNotRenderPrompt(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args:   []string{"gosh", "-c", `echo ok`},
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Env: append(testEnv(t),
+			`PS1=$(__gosh_missing_prompt_helper)`,
+		),
+		Version: "1.2.3",
+	})
+	if err != nil {
+		t.Fatalf("Run -c failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got, want := stdout.String(), "ok\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestRunNonInteractiveDoesNotSourceInitOrRenderPrompt(t *testing.T) {
+	dir := t.TempDir()
+	initFile := filepath.Join(dir, "goshrc")
+	if err := os.WriteFile(initFile, []byte("echo init-ran\nPS1='$(__gosh_missing_prompt_helper)'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args:   []string{"gosh"},
+		Stdin:  strings.NewReader("echo stdin\n"),
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Env: append(testEnv(t),
+			"GOSH_ENV="+initFile,
+			`PS1=$(__gosh_missing_prompt_helper)`,
+		),
+		Version: "1.2.3",
+	})
+	if err != nil {
+		t.Fatalf("Run stdin failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got, want := stdout.String(), "stdin\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
 func TestExitCode(t *testing.T) {
 	if got := ExitCode(nil); got != 0 {
 		t.Fatalf("ExitCode(nil) = %d, want 0", got)

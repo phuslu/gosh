@@ -122,8 +122,8 @@ func Run(c Config) error {
 		return prog
 	}())
 
-	// source the init files.
-	if command == nil {
+	// Source the interactive init file.
+	if interactive {
 		file, err := os.Open(resolveInitFile(env, interactive))
 		if err == nil {
 			prog, err := parser.Parse(file, file.Name())
@@ -137,11 +137,6 @@ func Run(c Config) error {
 			file.Close()
 		}
 	}
-
-	promptFallback := defaultPrompt(version)
-	promptSeq := 1
-	currentPrompt := promptString(ctx, runner, stdin, stderr, "PS1", promptFallback, promptSeq)
-	promptSeq++
 
 	if command != nil {
 		script := command.script
@@ -166,6 +161,11 @@ func Run(c Config) error {
 		runner.Reset()
 		return runNonInteractiveStream(ctx, stdin, runner, stdout, stderr)
 	}
+
+	promptFallback := defaultPrompt(version)
+	promptSeq := 1
+	currentPrompt := promptString(ctx, runner, stdin, stderr, "PS1", promptFallback, promptSeq)
+	promptSeq++
 
 	// export HISTFILE=""
 	history.limit = resolveShellHistoryLimit(runner)
