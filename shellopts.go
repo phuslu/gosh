@@ -4,24 +4,24 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"unsafe"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 )
 
-func installShellOptionVariable(runner *interp.Runner, interactive, readFromStdin bool, version string) {
+func installShellOptionVariable(runner *interp.Runner, provider *shellOptionProvider, version string) {
 	if runner == nil {
 		return
 	}
+	if provider == nil {
+		provider = &shellOptionProvider{}
+	}
+	provider.runner = runner
 	base := runner.Env
 	if base == nil {
 		base = expand.ListEnviron()
-	}
-	provider := &shellOptionProvider{
-		runner:        runner,
-		interactive:   interactive,
-		readFromStdin: readFromStdin,
 	}
 	runner.Env = &shellEnviron{base: base, flags: provider.Flags, version: version}
 }
@@ -56,6 +56,7 @@ type shellOptionProvider struct {
 	runner        *interp.Runner
 	interactive   bool
 	readFromStdin bool
+	verbose       atomic.Bool
 }
 
 func (p *shellOptionProvider) Flags() string {
@@ -77,6 +78,9 @@ func (p *shellOptionProvider) Flags() string {
 			b.WriteByte('s')
 		}
 	}
+	if p.verbose.Load() {
+		b.WriteByte('v')
+	}
 	// shell option mapping based on interp.shellOptsTable order
 	// (allexport, errexit, noexec, noglob, nounset, xtrace).
 	for _, opt := range []struct {
@@ -95,6 +99,53 @@ func (p *shellOptionProvider) Flags() string {
 		}
 	}
 	return b.String()
+}
+
+func handleSetVerboseOption(provider *shellOptionProvider, args []string) ([]string, bool) {
+	if provider == nil || len(args) == 0 || args[0] != "set" {
+		return nil, false
+	}
+	changed := false
+	forward := []string{args[0]}
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			forward = append(forward, args[i:]...)
+			return forward, changed
+		}
+		if arg == "-" {
+			provider.verbose.Store(false)
+			changed = true
+			forward = append(forward, args[i:]...)
+			return forward, changed
+		}
+		if (arg == "-o" || arg == "+o") && i+1 < len(args) && args[i+1] == "verbose" {
+			provider.verbose.Store(arg[0] == '-')
+			changed = true
+			i++
+			continue
+		}
+		if len(arg) < 2 || (arg[0] != '-' && arg[0] != '+') {
+			forward = append(forward, args[i:]...)
+			return forward, changed
+		}
+		var rest []byte
+		for idx := 1; idx < len(arg); idx++ {
+			if arg[idx] == 'v' {
+				provider.verbose.Store(arg[0] == '-')
+				changed = true
+				continue
+			}
+			rest = append(rest, arg[idx])
+		}
+		if len(rest) > 0 {
+			forward = append(forward, string(append([]byte{arg[0]}, rest...)))
+		}
+	}
+	if changed && len(forward) == 1 {
+		return []string{":"}, true
+	}
+	return forward, changed
 }
 
 func runnerOpts(r *interp.Runner) []bool {

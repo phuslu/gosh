@@ -105,14 +105,18 @@ func Run(c Config) error {
 	parser := syntax.NewParser()
 	history := &history{limit: resolveHistoryLimit()}
 	bindings := &keyBindingManager{entries: make(map[string]*goKeyBindingEntry)}
+	options := &shellOptionProvider{
+		interactive:   interactive,
+		readFromStdin: command == nil,
+	}
 	var runner *interp.Runner
-	opts = append(opts, interp.CallHandler(callHandler(func() *interp.Runner { return runner }, history, bindings)))
+	opts = append(opts, interp.CallHandler(callHandler(func() *interp.Runner { return runner }, history, bindings, options)))
 	opts = append(opts, interp.ExecHandlers(execHandler(func() *interp.Runner { return runner })))
 	runner, err = interp.New(opts...)
 	if err != nil {
 		return err
 	}
-	installShellOptionVariable(runner, interactive, command == nil, version)
+	installShellOptionVariable(runner, options, version)
 
 	runner.Run(ctx, func() *syntax.File {
 		prog, err := parser.Parse(strings.NewReader(`

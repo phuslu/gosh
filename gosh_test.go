@@ -414,6 +414,45 @@ func TestShellOptionVersion(t *testing.T) {
 	}
 }
 
+func TestSetVerboseOption(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args: []string{"gosh", "-c", `
+			set +v
+			echo after-plus
+			set -v
+			case $- in *v*) echo verbose-on;; *) echo bad-on;; esac
+			set +v
+			case $- in *v*) echo bad-off;; *) echo verbose-off;; esac
+			builtin set -o verbose
+			case $- in *v*) echo builtin-on;; *) echo bad-builtin-on;; esac
+			command set +o verbose
+			case $- in *v*) echo bad-command-off;; *) echo command-off;; esac
+		`},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Env:     testEnv(t),
+		Version: "1.2.3",
+	})
+	if err != nil {
+		t.Fatalf("Run set verbose option failed: %v\nstderr: %s", err, stderr.String())
+	}
+	want := strings.Join([]string{
+		"after-plus",
+		"verbose-on",
+		"verbose-off",
+		"builtin-on",
+		"command-off",
+		"",
+	}, "\n")
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout = %q, want %q\nstderr: %s", got, want, stderr.String())
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
 func TestShoptQuiet(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := Run(Config{

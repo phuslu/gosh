@@ -15,7 +15,7 @@ import (
 	"mvdan.cc/sh/v3/interp"
 )
 
-func callHandler(runner func() *interp.Runner, history *history, bindings *keyBindingManager) interp.CallHandlerFunc {
+func callHandler(runner func() *interp.Runner, history *history, bindings *keyBindingManager, options *shellOptionProvider) interp.CallHandlerFunc {
 	return func(ctx context.Context, args []string) ([]string, error) {
 		if len(args) == 0 {
 			return args, nil
@@ -46,6 +46,10 @@ func callHandler(runner func() *interp.Runner, history *history, bindings *keyBi
 				next = append(next, args[1:]...)
 				return next, nil
 			}
+		case "set":
+			if next, ok := handleSetVerboseOption(options, args); ok {
+				return next, nil
+			}
 		case "builtin":
 			var r *interp.Runner
 			if runner != nil {
@@ -59,6 +63,14 @@ func callHandler(runner func() *interp.Runner, history *history, bindings *keyBi
 				next[0] = shoptCommand
 				next = append(next, args[2:]...)
 				return next, nil
+			}
+			if len(args) >= 2 && args[1] == "set" {
+				if next, ok := handleSetVerboseOption(options, args[1:]); ok {
+					if len(next) == 1 && next[0] == ":" {
+						return next, nil
+					}
+					return append([]string{args[0]}, next...), nil
+				}
 			}
 			if len(args) >= 2 && args[1] == "printf" {
 				if next, ok := dropBuiltinPrintfDashDash(args[1:]); ok {
@@ -78,6 +90,14 @@ func callHandler(runner func() *interp.Runner, history *history, bindings *keyBi
 				next[0] = shoptCommand
 				next = append(next, shoptArgs...)
 				return next, nil
+			}
+			if len(args) >= 2 && args[1] == "set" {
+				if next, ok := handleSetVerboseOption(options, args[1:]); ok {
+					if len(next) == 1 && next[0] == ":" {
+						return next, nil
+					}
+					return append([]string{args[0]}, next...), nil
+				}
 			}
 			if next, ok := dropCommandPrintfDashDash(args); ok {
 				return next, nil
