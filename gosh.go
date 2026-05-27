@@ -17,17 +17,17 @@ import (
 
 // Config describes one gosh shell invocation.
 type Config struct {
-	Version               string
-	Context               context.Context
-	Args                  []string
-	Stdin                 io.Reader
-	Stdout                io.Writer
-	Stderr                io.Writer
-	Env                   []string
-	Dir                   string
-	NotifySignals         bool
-	IsTerminal            bool
-	EnableVirtualTerminal func(stdin, stdout, stderr bool) error
+	Version       string
+	Context       context.Context
+	Args          []string
+	Stdin         io.Reader
+	Stdout        io.Writer
+	Stderr        io.Writer
+	Env           []string
+	Dir           string
+	NotifySignals bool
+	IsTerminal    bool
+	OnPromptReset func(context.Context)
 }
 
 func Run(c Config) error {
@@ -79,8 +79,8 @@ func Run(c Config) error {
 		defer cancel()
 	}
 
-	if c.IsTerminal && c.EnableVirtualTerminal != nil {
-		_ = c.EnableVirtualTerminal(true, false, false)
+	if c.IsTerminal && c.OnPromptReset != nil {
+		c.OnPromptReset(ctx)
 	}
 	getScreenWidth := func() int {
 		return readline.GetScreenWidth()
@@ -236,9 +236,9 @@ func Run(c Config) error {
 		nextPrefix = ""
 	}
 	resetPrompt := func() {
-		if c.IsTerminal && c.EnableVirtualTerminal != nil {
+		if c.IsTerminal && c.OnPromptReset != nil {
 			// Windows consoles may lose VT mode after programs exit.
-			_ = c.EnableVirtualTerminal(true, false, false)
+			c.OnPromptReset(ctx)
 		}
 		updateCheckwinsizeColumns(runner, getScreenWidth)
 		setPrompt(promptString(ctx, runner, stdin, stderr, "PS1", defaultPrompt(version), promptSeq))
