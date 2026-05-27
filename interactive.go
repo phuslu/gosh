@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -81,6 +82,23 @@ func runNonInteractiveStream(ctx context.Context, r io.Reader, runner *interp.Ru
 		}
 	}
 	return lastStatus
+}
+
+func runInteractiveStatements(ctx context.Context, runner *interp.Runner, stmts []*syntax.Stmt, stderr io.Writer) (bool, error) {
+	for _, stmt := range stmts {
+		err := runner.Run(ctx, stmt)
+		if runner.Exited() {
+			return false, err
+		}
+		if err != nil {
+			var status interp.ExitStatus
+			if errors.As(err, &status) {
+				continue
+			}
+			fmt.Fprintln(stderr, err.Error())
+		}
+	}
+	return true, nil
 }
 
 func parseNextStatements(data []byte, offset int) ([]*syntax.Stmt, int, error) {

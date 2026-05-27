@@ -2,7 +2,6 @@ package gosh
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -253,6 +252,7 @@ func Run(c Config) error {
 	// incomplete statement. Ctrl-D / EOF returns io.EOF to end the session.
 	rdr := &reader{rl: rl, history: history}
 
+	var exitErr error
 	err = runInteractiveParser(parser, rdr, func(stmts []*syntax.Stmt) bool {
 		// parser.Incomplete() returns true when the parser has consumed a
 		// partial statement and is waiting for more input (e.g. open quotes,
@@ -265,17 +265,10 @@ func Run(c Config) error {
 		}
 
 		rdr.savePendingHistory()
-		for _, stmt := range stmts {
-			if err := runner.Run(ctx, stmt); err != nil {
-				var status interp.ExitStatus
-				if errors.As(err, &status) {
-					continue
-				}
-				fmt.Fprintln(rl.Stderr(), err.Error())
-			}
-			if runner.Exited() {
-				return false
-			}
+		cont, err := runInteractiveStatements(ctx, runner, stmts, rl.Stderr())
+		if !cont {
+			exitErr = err
+			return false
 		}
 
 		// Restore the main prompt, updating it in case the effective UID
@@ -290,6 +283,9 @@ func Run(c Config) error {
 	})
 	if history.fileDirty() {
 		_ = history.RewriteFile()
+	}
+	if exitErr != nil {
+		return exitErr
 	}
 	return err
 }

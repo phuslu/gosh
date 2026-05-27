@@ -151,6 +151,65 @@ func TestExitCode(t *testing.T) {
 	}
 }
 
+func TestRunInteractiveStatementsIgnoresOrdinaryExitStatus(t *testing.T) {
+	runner := newStatusRunner(t, 42)
+	stmts := parseTestStmts(t, "dummy\n")
+	var stderr bytes.Buffer
+
+	cont, err := runInteractiveStatements(context.Background(), runner, stmts, &stderr)
+	if !cont {
+		t.Fatalf("runInteractiveStatements stopped on ordinary exit status")
+	}
+	if err != nil {
+		t.Fatalf("runInteractiveStatements error = %v, want nil", err)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestRunInteractiveStatementsReturnsExecExitStatus(t *testing.T) {
+	runner := newStatusRunner(t, 42)
+	stmts := parseTestStmts(t, "exec dummy\n")
+	var stderr bytes.Buffer
+
+	cont, err := runInteractiveStatements(context.Background(), runner, stmts, &stderr)
+	if cont {
+		t.Fatalf("runInteractiveStatements continued after exec")
+	}
+	if got := ExitCode(err); got != 42 {
+		t.Fatalf("exec exit code = %d, want 42 (err: %v)", got, err)
+	}
+}
+
+func newStatusRunner(t *testing.T, status uint8) *interp.Runner {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	runner, err := interp.New(
+		interp.Interactive(true),
+		interp.StdIO(strings.NewReader(""), &stdout, &stderr),
+		interp.Env(expand.ListEnviron(testEnv(t)...)),
+		interp.ExecHandlers(func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+			return func(ctx context.Context, args []string) error {
+				return interp.ExitStatus(status)
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatalf("interp.New failed: %v", err)
+	}
+	return runner
+}
+
+func parseTestStmts(t *testing.T, src string) []*syntax.Stmt {
+	t.Helper()
+	prog, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatalf("parse %q failed: %v", src, err)
+	}
+	return prog.Stmts
+}
+
 func TestSetEnv(t *testing.T) {
 	env := []string{"A=1", "B=2", "A=3"}
 	env = SetEnv(env, "A", "4")
