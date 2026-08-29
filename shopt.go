@@ -41,7 +41,6 @@ var shoptBashOptionNames = []string{
 	"compat40",
 	"compat41",
 	"compat42",
-	"compat44",
 	"compat43",
 	"compat44",
 	"complete_fullquote",
