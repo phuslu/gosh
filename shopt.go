@@ -3,6 +3,7 @@ package gosh
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"mvdan.cc/sh/v3/interp"
 )
@@ -254,23 +255,35 @@ func runShopt(ctx context.Context, runner *interp.Runner, args []string) error {
 }
 
 func setShoptOptions(ctx context.Context, runner *interp.Runner, parsed shoptArgs) error {
+	// runShopt only calls this for non-POSIX lists containing at least one
+	// gosh-managed option. Supported Bash options use interp.BashOpts, and
+	// gosh-managed options still require the mirrored option slice below.
 	hc := interp.HandlerCtx(ctx)
 	for _, arg := range parsed.args {
-		opt, supported, managed := shoptOption(runner, parsed.posix, arg)
-		if opt == nil {
-			fmt.Fprintf(hc.Stderr, "shopt: invalid option name %q\n", arg)
-			return interp.ExitStatus(1)
-		}
-		if !supported {
-			fmt.Fprintf(hc.Stderr, "shopt: unsupported option %q\n", arg)
-			return interp.ExitStatus(1)
-		}
-		if managed {
+		if shoptManagedOption(arg) {
+			// Upstream declares these options unsupported, so BashOpts cannot
+			// set them. gosh manages them directly; this is the one remaining
+			// reflection path for option mutation.
+			opt, supported, managed := shoptOption(runner, false, arg)
+			if opt == nil || !supported || !managed {
+				fmt.Fprintf(hc.Stderr, "shopt: unsupported option %q\n", arg)
+				return interp.ExitStatus(1)
+			}
 			*opt = parsed.mode == "-s"
 			continue
 		}
-		if err := hc.Builtin(ctx, []string{"shopt", parsed.mode, arg}); err != nil {
-			return err
+
+		// Use the public mutation API for the supported Bash options.
+		if err := interp.BashOpts(parsed.mode, arg)(runner); err != nil {
+			switch {
+			case strings.Contains(err.Error(), "invalid option name"):
+				fmt.Fprintf(hc.Stderr, "shopt: invalid option name %q\n", arg)
+			case strings.Contains(err.Error(), "unsupported option"):
+				fmt.Fprintf(hc.Stderr, "shopt: unsupported option %q\n", arg)
+			default:
+				fmt.Fprintf(hc.Stderr, "shopt: %v\n", err)
+			}
+			return interp.ExitStatus(1)
 		}
 	}
 	return nil
@@ -290,6 +303,10 @@ func shoptEnabled(runner *interp.Runner, name string) bool {
 }
 
 func shoptOption(runner *interp.Runner, posix bool, name string) (*bool, bool, bool) {
+	// Reads the interpreter's unexported option slice because interp exposes
+	// option mutation via BashOpts but has no getter needed by "shopt -q" and
+	// option listing. Keep the mirrored tables in sync with upstream;
+	// TestShoptListMatchesUpstream guards their order and state mapping.
 	opts := runnerOpts(runner)
 	if posix {
 		for i, opt := range shoptPosixOptionNames {

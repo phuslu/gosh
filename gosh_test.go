@@ -600,6 +600,42 @@ func TestShoptQuiet(t *testing.T) {
 	}
 }
 
+func TestShoptSetMixedOptions(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args: []string{"gosh", "-c", `
+			shopt -s extglob failglob
+			if shopt -q extglob failglob; then echo bash-set; else echo bad-bash-set; fi
+			shopt -u extglob failglob
+			if shopt -q extglob || shopt -q failglob; then echo bad-bash-unset; else echo bash-unset; fi
+			shopt -s -o noglob
+			if shopt -q -o noglob; then echo posix-set; else echo bad-posix-set; fi
+			shopt -u -o noglob
+			if shopt -q -o noglob; then echo bad-posix-unset; else echo posix-unset; fi
+		`},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Env:     testEnv(t),
+		Version: "1.2.3",
+	})
+	if err != nil {
+		t.Fatalf("Run mixed shopt set failed: %v\nstderr: %s", err, stderr.String())
+	}
+	want := strings.Join([]string{
+		"bash-set",
+		"bash-unset",
+		"posix-set",
+		"posix-unset",
+		"",
+	}, "\n")
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout = %q, want %q\nstderr: %s", got, want, stderr.String())
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
 func TestShoptListMatchesUpstream(t *testing.T) {
 	for _, posix := range []bool{false, true} {
 		script := "shopt"
