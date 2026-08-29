@@ -1,0 +1,55 @@
+name: test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify module requirements
+        run: go mod verify
+
+      - name: Check module tidiness
+        run: go mod tidy -diff
+
+      - name: Check pinned dependencies
+        run: |
+          test "$(go list -m -f '{{.Version}}' mvdan.cc/sh/v3)" = 'v3.14.0'
+          test "$(go list -m -f '{{.Version}}' github.com/chzyer/readline)" = 'v1.5.1'
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -count=1
+
+      - name: Test with race detector
+        run: CGO_ENABLED=1 go test -race ./... -count=1
+
+      - name: Cross-compile for Windows
+        run: GOOS=windows GOARCH=amd64 go build ./...
+
+      - name: Verify CLI module
+        working-directory: cmd/gosh
+        run: go mod tidy -diff
+
+      - name: Vet CLI module
+        working-directory: cmd/gosh
+        run: go vet ./...
+
+      - name: Build CLI module
+        working-directory: cmd/gosh
+        run: go build -mod=readonly .
