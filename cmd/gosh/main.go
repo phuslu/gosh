@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 
 	"github.com/phuslu/gosh"
@@ -16,7 +17,7 @@ func main() {
 		Stderr:        os.Stderr,
 		NotifySignals: true,
 		IsTerminal:    pty.IsTerminal(os.Stdin.Fd()) && pty.IsTerminal(os.Stderr.Fd()),
-		OnPromptReset: func() { pty.EnableVirtualTerminal(true, false, false) },
+		OnPromptReset: func(_ context.Context) { pty.EnableVirtualTerminal(true, false, false) },
 	})
 	if err != nil {
 		os.Exit(gosh.ExitCode(err))
