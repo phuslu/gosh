@@ -469,20 +469,20 @@ func TestShellOptionVersion(t *testing.T) {
 	}
 }
 
-func TestSetVerboseOption(t *testing.T) {
+func TestSetVerboseOptionAccepted(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := Run(Config{
 		Args: []string{"gosh", "-c", `
 			set +v
 			echo after-plus
 			set -v
-			case $- in *v*) echo verbose-on;; *) echo bad-on;; esac
+			case $- in *v*) echo bad-v;; *) echo verbose-ignored;; esac
 			set +v
-			case $- in *v*) echo bad-off;; *) echo verbose-off;; esac
+			echo after-minus
 			builtin set -o verbose
-			case $- in *v*) echo builtin-on;; *) echo bad-builtin-on;; esac
+			echo builtin-ok
 			command set +o verbose
-			case $- in *v*) echo bad-command-off;; *) echo command-off;; esac
+			echo command-ok
 		`},
 		Stdout:  &stdout,
 		Stderr:  &stderr,
@@ -494,10 +494,10 @@ func TestSetVerboseOption(t *testing.T) {
 	}
 	want := strings.Join([]string{
 		"after-plus",
-		"verbose-on",
-		"verbose-off",
-		"builtin-on",
-		"command-off",
+		"verbose-ignored",
+		"after-minus",
+		"builtin-ok",
+		"command-ok",
 		"",
 	}, "\n")
 	if got := stdout.String(); got != want {
@@ -505,6 +505,55 @@ func TestSetVerboseOption(t *testing.T) {
 	}
 	if got := stderr.String(); got != "" {
 		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestRunCommandDashVariable(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args:    []string{"gosh", "-c", `printf 'marker=<%s> dash=<%s>\n' "${GOSH_INTERACTIVE-}" "$-"`},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Env:     testEnv(t),
+		Version: "1.2.3",
+	})
+	if err != nil {
+		t.Fatalf("Run dash variable failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got, want := stdout.String(), "marker=<> dash=<>\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestRunInteractiveMarkerAndDashVariable(t *testing.T) {
+	stdinPath := filepath.Join(t.TempDir(), "stdin")
+	if err := os.WriteFile(stdinPath, []byte("printf 'marker=<%s> dash=<%s>\\n' \"${GOSH_INTERACTIVE-}\" \"$-\"\nexit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdin, err := os.Open(stdinPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+
+	var stdout, stderr bytes.Buffer
+	err = Run(Config{
+		Args:       []string{"gosh"},
+		Stdin:      stdin,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+		Env:        testEnv(t),
+		IsTerminal: true,
+		Version:    "1.2.3",
+	})
+	if err != nil {
+		t.Fatalf("Run interactive marker failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got, want := stdout.String(), "marker=<1> dash=<>\n"; got != want {
+		t.Fatalf("stdout = %q, want %q\nstderr: %q", got, want, stderr.String())
 	}
 }
 
