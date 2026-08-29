@@ -462,11 +462,7 @@ func TestPromptCommandSubstitutionKeepsOutputOnExitStatus(t *testing.T) {
 func TestShellOptionVersion(t *testing.T) {
 	env := &shellEnviron{
 		base:    expand.ListEnviron("X=1"),
-		flags:   func() string { return "hBs" },
 		version: "1.2.3",
-	}
-	if got := env.Get("-").String(); got != "hBs" {
-		t.Fatalf("$- = %q, want hBs", got)
 	}
 	if got := env.Get("BASH_VERSION").String(); got != "1.2.3(1)-gosh" {
 		t.Fatalf("BASH_VERSION = %q", got)

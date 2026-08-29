@@ -3,40 +3,30 @@ package gosh
 import (
 	"reflect"
 	"strconv"
-	"strings"
-	"sync/atomic"
 	"unsafe"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 )
 
-func installShellOptionVariable(runner *interp.Runner, provider *shellOptionProvider, version string) {
+func installShellOptionVariable(runner *interp.Runner, version string) {
 	if runner == nil {
 		return
 	}
-	if provider == nil {
-		provider = &shellOptionProvider{}
-	}
-	provider.runner = runner
 	base := runner.Env
 	if base == nil {
 		base = expand.ListEnviron()
 	}
-	runner.Env = &shellEnviron{base: base, flags: provider.Flags, version: version}
+	runner.Env = &shellEnviron{base: base, version: version}
 }
 
 type shellEnviron struct {
 	base    expand.Environ
-	flags   func() string
 	version string
 }
 
 func (e *shellEnviron) Get(name string) expand.Variable {
-	switch name {
-	case "-":
-		return expand.Variable{Set: true, Kind: expand.String, Str: e.flags()}
-	case "BASH_VERSION":
+	if name == "BASH_VERSION" {
 		return expand.Variable{Set: true, Kind: expand.String, Str: e.version + "(1)-gosh"}
 	}
 	if e.base == nil {
@@ -52,57 +42,11 @@ func (e *shellEnviron) Each(f func(name string, vr expand.Variable) bool) {
 	e.base.Each(f)
 }
 
-type shellOptionProvider struct {
-	runner        *interp.Runner
-	interactive   bool
-	readFromStdin bool
-	verbose       atomic.Bool
-}
-
-func (p *shellOptionProvider) Flags() string {
-	if p == nil || p.runner == nil {
-		return ""
-	}
-	opts := runnerOpts(p.runner)
-	var b strings.Builder
-	b.WriteByte('h')
-	if p.interactive {
-		b.WriteByte('i')
-		b.WriteByte('m')
-		b.WriteByte('B')
-		b.WriteByte('H')
-		b.WriteByte('s')
-	} else {
-		b.WriteByte('B')
-		if p.readFromStdin {
-			b.WriteByte('s')
-		}
-	}
-	if p.verbose.Load() {
-		b.WriteByte('v')
-	}
-	// shell option mapping based on interp.shellOptsTable order
-	// (allexport, errexit, noexec, noglob, nounset, xtrace).
-	for _, opt := range []struct {
-		index int
-		flag  byte
-	}{
-		{0, 'a'},
-		{1, 'e'},
-		{2, 'n'},
-		{3, 'f'},
-		{4, 'u'},
-		{5, 'x'},
-	} {
-		if opt.index < len(opts) && opts[opt.index] {
-			b.WriteByte(opt.flag)
-		}
-	}
-	return b.String()
-}
-
-func handleSetVerboseOption(provider *shellOptionProvider, args []string) ([]string, bool) {
-	if provider == nil || len(args) == 0 || args[0] != "set" {
+// handleSetVerboseOption keeps "set -v"/"set +v" working as accepted no-ops.
+// mvdan.cc/sh/v3 does not implement the Bash verbose option, and v3.14 now
+// computes "$-" itself, so we strip the flag before forwarding to its "set".
+func handleSetVerboseOption(args []string) ([]string, bool) {
+	if len(args) == 0 || args[0] != "set" {
 		return nil, false
 	}
 	changed := false
@@ -114,13 +58,10 @@ func handleSetVerboseOption(provider *shellOptionProvider, args []string) ([]str
 			return forward, changed
 		}
 		if arg == "-" {
-			provider.verbose.Store(false)
-			changed = true
 			forward = append(forward, args[i:]...)
 			return forward, changed
 		}
 		if (arg == "-o" || arg == "+o") && i+1 < len(args) && args[i+1] == "verbose" {
-			provider.verbose.Store(arg[0] == '-')
 			changed = true
 			i++
 			continue
@@ -132,7 +73,6 @@ func handleSetVerboseOption(provider *shellOptionProvider, args []string) ([]str
 		var rest []byte
 		for idx := 1; idx < len(arg); idx++ {
 			if arg[idx] == 'v' {
-				provider.verbose.Store(arg[0] == '-')
 				changed = true
 				continue
 			}

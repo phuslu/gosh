@@ -15,7 +15,7 @@ import (
 	"mvdan.cc/sh/v3/interp"
 )
 
-func callHandler(runner func() *interp.Runner, history *history, bindings *keyBindingManager, options *shellOptionProvider) interp.CallHandlerFunc {
+func callHandler(runner func() *interp.Runner, history *history, bindings *keyBindingManager) interp.CallHandlerFunc {
 	return func(ctx context.Context, args []string) ([]string, error) {
 		if len(args) == 0 {
 			return args, nil
@@ -47,7 +47,7 @@ func callHandler(runner func() *interp.Runner, history *history, bindings *keyBi
 				return next, nil
 			}
 		case "set":
-			if next, ok := handleSetVerboseOption(options, args); ok {
+			if next, ok := handleSetVerboseOption(args); ok {
 				return next, nil
 			}
 		case "builtin":
@@ -65,7 +65,7 @@ func callHandler(runner func() *interp.Runner, history *history, bindings *keyBi
 				return next, nil
 			}
 			if len(args) >= 2 && args[1] == "set" {
-				if next, ok := handleSetVerboseOption(options, args[1:]); ok {
+				if next, ok := handleSetVerboseOption(args[1:]); ok {
 					if len(next) == 1 && next[0] == ":" {
 						return next, nil
 					}
@@ -92,7 +92,7 @@ func callHandler(runner func() *interp.Runner, history *history, bindings *keyBi
 				return next, nil
 			}
 			if len(args) >= 2 && args[1] == "set" {
-				if next, ok := handleSetVerboseOption(options, args[1:]); ok {
+				if next, ok := handleSetVerboseOption(args[1:]); ok {
 					if len(next) == 1 && next[0] == ":" {
 						return next, nil
 					}

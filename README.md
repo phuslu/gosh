@@ -57,7 +57,8 @@ enabled
 - `history` builtin backed by `HISTFILE`, `HISTSIZE`, and `HISTCONTROL`.
 - `shopt -q` compatibility, including `builtin shopt -q` and
   `command shopt -q`.
-- `BASH_VERSION` and `$-` compatibility variables for shell startup files.
+- `BASH_VERSION` compatibility variable and a `GOSH_INTERACTIVE` marker for
+  interactive startup files.
 - Programmatic use through `gosh.Run`.
 
 ## Configuration
@@ -70,7 +71,7 @@ prompts.
 Example `~/.bashrc` or `GOSH_ENV` file:
 
 ```sh
-if [ -n "${BASH_VERSION-}" ] && case "$-" in *i*) true;; *) false;; esac; then
+if [ -n "${GOSH_INTERACTIVE-}" ]; then
     bind '"\e[1~": beginning-of-line'
     bind '"\e[4~": end-of-line'
     bind '"\e[5~": previous-screen'
@@ -143,6 +144,11 @@ Some Bash features that depend on a full POSIX job-control shell, a PTY-managed
 process tree, or Bash internals may behave differently. Treat `gosh` as a small,
 embeddable shell with strong Bash compatibility for common scripts and
 interactive workflows, not as a login-shell replacement.
+
+As of `mvdan.cc/sh/v3` v3.14.0, `$-` only reports the interpreter's POSIX
+option flags, so Bash flags like `i`, `m`, `h`, `B`, `H`, and `s` are not
+present. Use `GOSH_INTERACTIVE` to detect interactive sessions in startup
+files.
 
 ## Development
 
