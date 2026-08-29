@@ -600,6 +600,52 @@ func TestShoptQuiet(t *testing.T) {
 	}
 }
 
+func TestShoptListMatchesUpstream(t *testing.T) {
+	for _, posix := range []bool{false, true} {
+		script := "shopt"
+		if posix {
+			script = "shopt -o"
+		}
+		prog, err := syntax.NewParser().Parse(strings.NewReader(script), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var upstreamOut, upstreamErr bytes.Buffer
+		runner, err := interp.New(interp.StdIO(strings.NewReader(""), &upstreamOut, &upstreamErr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := runner.Run(context.Background(), prog); err != nil {
+			t.Fatalf("upstream %s failed: %v\nstderr: %s", script, err, upstreamErr.String())
+		}
+
+		var got bytes.Buffer
+		printShoptOptions(&got, runner, posix)
+		gotEntries := shoptListingEntries(got.String())
+		wantEntries := shoptListingEntries(upstreamOut.String())
+		if !reflect.DeepEqual(gotEntries, wantEntries) {
+			t.Fatalf("gosh %s listing drifted from mvdan.cc/sh:\ngosh: %q\nupstream: %q", script, gotEntries, wantEntries)
+		}
+	}
+}
+
+// shoptListingEntries reduces a shopt listing to ordered "name\tstate" pairs,
+// dropping the "(not supported)" annotation which gosh intentionally renders
+// differently for the options it manages itself.
+func shoptListingEntries(s string) []string {
+	var entries []string
+	for _, line := range strings.Split(strings.TrimSuffix(s, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		name, rest, _ := strings.Cut(line, "\t")
+		state, _, _ := strings.Cut(rest, "\t")
+		entries = append(entries, name+"\t"+state)
+	}
+	return entries
+}
+
 func TestShoptCheckwinsize(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := Run(Config{
