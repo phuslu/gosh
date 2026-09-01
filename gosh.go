@@ -1,3 +1,11 @@
+// Package gosh is a compact Bash-style shell and embeddable shell runtime.
+//
+// It combines mvdan.cc/sh/v3 for shell parsing and interpretation with an
+// in-tree readline implementation for interactive use, adding the pieces
+// that make it usable as a Bash-flavored interactive shell: history,
+// prompts, completion, and key bindings.
+//
+// Run executes one shell invocation; see Config for the available options.
 package gosh
 
 import (
