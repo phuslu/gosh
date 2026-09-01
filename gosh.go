@@ -308,6 +308,9 @@ func (s *Shell) Run(ctx context.Context) error {
 // Eval parses and evaluates script in the Shell's interpreter, preserving
 // variables, functions, options, and working directory for later calls.
 func (s *Shell) Eval(ctx context.Context, script string) error {
+	if s.noop {
+		return fmt.Errorf("gosh: shell was created for a metadata-only invocation")
+	}
 	if ctx == nil {
 		ctx = s.baseCtx
 	}
@@ -321,6 +324,9 @@ func (s *Shell) Eval(ctx context.Context, script string) error {
 // Interactive starts the readline-driven interactive frontend on the
 // Shell's current interpreter state.
 func (s *Shell) Interactive(ctx context.Context) error {
+	if s.noop {
+		return fmt.Errorf("gosh: shell was created for a metadata-only invocation")
+	}
 	ctx, cancel := s.runContext(ctx)
 	defer cancel()
 	if s.cfg.IsTerminal && s.cfg.OnPromptReset != nil {
