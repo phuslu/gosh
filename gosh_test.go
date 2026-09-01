@@ -3,6 +3,7 @@ package gosh
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -129,6 +130,32 @@ func TestRunNonInteractiveQuotedNewline(t *testing.T) {
 	}
 	if got := stderr.String(); got != "" {
 		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestRunNonInteractiveManyStatements(t *testing.T) {
+	var script, want strings.Builder
+	for i := 0; i < 500; i++ {
+		fmt.Fprintf(&script, "echo line-%d\n", i)
+		fmt.Fprintf(&want, "line-%d\n", i)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args:   []string{"gosh"},
+		Stdin:  strings.NewReader(script.String()),
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Env:    testEnv(t),
+	})
+	if err != nil {
+		t.Fatalf("Run stdin failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got := stdout.String(); got != want.String() {
+		t.Fatalf("stdout mismatch: got %d bytes, want %d bytes", len(got), len(want.String()))
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
 }
 

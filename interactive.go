@@ -31,6 +31,14 @@ func runNonInteractiveStream(ctx context.Context, r io.Reader, runner *interp.Ru
 	if err != nil {
 		return err
 	}
+	stdin, err := newStdinFile(data)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		stdin.Close()
+		os.Remove(stdin.Name())
+	}()
 	var runErr error
 	var lastStatus error
 	for offset := 0; offset < len(data); {
@@ -41,13 +49,10 @@ func runNonInteractiveStream(ctx context.Context, r io.Reader, runner *interp.Ru
 		if next <= offset {
 			break
 		}
-		stdin, err := remainingStdinFile(data[next:])
-		if err != nil {
+		if _, err := stdin.Seek(int64(next), io.SeekStart); err != nil {
 			return err
 		}
 		if err := interp.StdIO(stdin, stdout, stderr)(runner); err != nil {
-			stdin.Close()
-			os.Remove(stdin.Name())
 			return err
 		}
 		for _, stmt := range stmts {
@@ -68,12 +73,10 @@ func runNonInteractiveStream(ctx context.Context, r io.Reader, runner *interp.Ru
 			}
 		}
 		pos, seekErr := stdin.Seek(0, io.SeekCurrent)
-		stdin.Close()
-		os.Remove(stdin.Name())
 		if seekErr != nil {
 			return seekErr
 		}
-		offset = next + int(pos)
+		offset = int(pos)
 		if runErr != nil {
 			return runErr
 		}
@@ -130,7 +133,12 @@ func parseNextStatements(data []byte, offset int) ([]*syntax.Stmt, int, error) {
 	return nil, len(data), io.ErrUnexpectedEOF
 }
 
-func remainingStdinFile(data []byte) (*os.File, error) {
+// newStdinFile writes the full stdin data to one temp file, preserving the
+// file semantics the interpreter needs (byte-wise reads, read deadlines, fd
+// inheritance). gosh seeks this single file before each statement batch;
+// creating and filling a fresh file per statement made large inputs
+// quadratic in disk writes.
+func newStdinFile(data []byte) (*os.File, error) {
 	file, err := os.CreateTemp("", "gosh-stdin-*")
 	if err != nil {
 		return nil, err
