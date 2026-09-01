@@ -16,7 +16,10 @@ func main() {
 		Stdout:        os.Stdout,
 		Stderr:        os.Stderr,
 		NotifySignals: true,
-		IsTerminal:    pty.IsTerminal(os.Stdin.Fd()) && pty.IsTerminal(os.Stderr.Fd()),
+		// Like Bash, interactivity follows stdin: prompts render on stderr
+		// wherever it points, so redirecting stderr should not silently turn
+		// the session into a non-interactive stdin script.
+		IsTerminal:    pty.IsTerminal(os.Stdin.Fd()),
 		OnPromptReset: func(_ context.Context) { pty.EnableVirtualTerminal(true, false, false) },
 	})
 	if err != nil {
