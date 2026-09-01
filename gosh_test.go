@@ -680,6 +680,46 @@ func TestPromptCommandSubstitutionKeepsOutputOnExitStatus(t *testing.T) {
 	}
 }
 
+func TestPromptvarsDisabled(t *testing.T) {
+	ctx := context.Background()
+	var stdout, stderr bytes.Buffer
+	env := SetEnv(testEnv(t), "HOME", "/home/alice")
+	runner, err := interp.New(
+		interp.Interactive(true),
+		interp.StdIO(strings.NewReader(""), &stdout, &stderr),
+		interp.Env(expand.ListEnviron(env...)),
+	)
+	if err != nil {
+		t.Fatalf("interp.New failed: %v", err)
+	}
+
+	state := &promptState{
+		ctx:    ctx,
+		runner: runner,
+		stdin:  strings.NewReader(""),
+		stderr: &stderr,
+		vars:   map[string]string{"HOME": "/home/alice"},
+		dir:    "/home/alice/project",
+	}
+	src := `\w $HOME`
+
+	got := (&promptRenderer{src: src, state: state}).render()
+	if want := "~/project /home/alice"; got != want {
+		t.Fatalf("prompt with promptvars on = %q, want %q", got, want)
+	}
+
+	opt, _, managed := shoptOption(runner, false, "promptvars")
+	if opt == nil || !managed {
+		t.Fatalf("promptvars should be a gosh-managed option")
+	}
+	*opt = false
+
+	got = (&promptRenderer{src: src, state: state}).render()
+	if want := "~/project $HOME"; got != want {
+		t.Fatalf("prompt with promptvars off = %q, want %q", got, want)
+	}
+}
+
 func TestShellOptionVersion(t *testing.T) {
 	env := &shellEnviron{
 		base:    expand.ListEnviron("X=1"),
@@ -1073,6 +1113,38 @@ func TestShoptProgcomp(t *testing.T) {
 	}, "\n")
 	if got := stdout.String(); got != want {
 		t.Fatalf("stdout = %q, want %q\nstderr: %s", got, want, stderr.String())
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestShoptPromptvars(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args: []string{"gosh", "-c", `
+			if shopt -q promptvars; then echo default-on; else echo bad-default; fi
+			shopt -u promptvars
+			if shopt -q promptvars; then echo bad-unset; else echo unset; fi
+			shopt -s promptvars
+			shopt promptvars
+		`},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Env:     testEnv(t),
+		Version: "1.2.3",
+	})
+	if err != nil {
+		t.Fatalf("Run promptvars shopt failed: %v\nstderr: %s", err, stderr.String())
+	}
+	want := strings.Join([]string{
+		"default-on",
+		"unset",
+		"promptvars\ton",
+		"",
+	}, "\n")
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	if got := stderr.String(); got != "" {
 		t.Fatalf("stderr = %q, want empty", got)

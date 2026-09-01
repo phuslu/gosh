@@ -164,6 +164,12 @@ func (p *promptState) promptSymbol() string {
 	return "$"
 }
 
+// promptvars reports whether parameter expansion and command substitution
+// should be performed on the prompt string, per the Bash promptvars option.
+func (p *promptState) promptvars() bool {
+	return p.runner == nil || shoptEnabled(p.runner, "promptvars")
+}
+
 // historyNumber returns the number Bash assigns to the command about to be
 // entered: one past the current in-memory history count.
 func (p *promptState) historyNumber() string {
@@ -207,6 +213,11 @@ func (r *promptRenderer) render() string {
 			b.WriteString(val)
 			i = pos
 		case '$':
+			if !r.state.promptvars() {
+				b.WriteByte('$')
+				i++
+				continue
+			}
 			val, next := r.expandDollar(i)
 			if next == i {
 				b.WriteByte('$')
