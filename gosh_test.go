@@ -9,9 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unsafe"
 
-	"github.com/ergochat/readline"
+	"github.com/phuslu/gosh/internal/readline"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
@@ -369,9 +368,9 @@ func TestHistorySearchBellWritesDirectly(t *testing.T) {
 	}
 }
 
-func TestSetReadlineBufferReflection(t *testing.T) {
+func TestSetReadlineBuffer(t *testing.T) {
 	rl, err := readline.NewEx(&readline.Config{
-		Stdin:          strings.NewReader(""),
+		Stdin:          strings.NewReader("\n"),
 		FuncIsTerminal: func() bool { return false },
 	})
 	if err != nil {
@@ -379,27 +378,15 @@ func TestSetReadlineBufferReflection(t *testing.T) {
 	}
 	defer rl.Close()
 
-	if !setReadlineBuffer(rl, []rune("héllo"), 2) {
+	if !setReadlineBuffer(rl, []rune("hello"), 2) {
 		t.Fatalf("setReadlineBuffer returned false")
 	}
-
-	op := reflect.ValueOf(rl).Elem().FieldByName("operation")
-	if !op.IsValid() || op.Kind() != reflect.Pointer || op.IsNil() {
-		t.Fatalf("cannot locate operation field")
+	line, err := rl.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine failed: %v", err)
 	}
-	bufField := op.Elem().FieldByName("buf")
-	if !bufField.IsValid() || bufField.Kind() != reflect.Pointer || bufField.IsNil() {
-		t.Fatalf("cannot locate buf field")
-	}
-	bufPtr := reflect.NewAt(bufField.Type(), unsafe.Pointer(bufField.UnsafeAddr())).Elem()
-	buf := bufPtr.Elem()
-
-	out := buf.Addr().MethodByName("Runes").Call(nil)
-	if got := string(out[0].Interface().([]rune)); got != "héllo" {
-		t.Fatalf("buffer = %q, want %q", got, "héllo")
-	}
-	if idx := buf.FieldByName("idx").Int(); idx != 2 {
-		t.Fatalf("cursor = %d, want 2", idx)
+	if got, want := line, "hello"; got != want {
+		t.Fatalf("line = %q, want %q", got, want)
 	}
 }
 

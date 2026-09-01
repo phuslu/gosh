@@ -9,7 +9,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/ergochat/readline"
+	"github.com/phuslu/gosh/internal/readline"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
@@ -191,9 +191,8 @@ func Run(c Config) error {
 		return enabled
 	}
 
-	probe := &dsrProbe{}
-	conWriter := newDSRWriter(ptyNewConsoleANSIWriter(stderr), probe)
-	boundStdin := &keyBindingInput{src: probeableStdin(stdin), mgr: bindings, probe: probe}
+	conWriter := ptyNewConsoleANSIWriter(stderr)
+	boundStdin := &keyBindingInput{src: stdin, mgr: bindings}
 	promptPrinter := &promptPrinter{}
 	completer := &autoCompleter{ctx: ctx, runner: runner, stdin: stdin, stdout: conWriter, stderr: conWriter, promptPrinter: promptPrinter}
 	historySearch := &historySearch{history: history, searchIndex: -1}

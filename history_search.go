@@ -1,12 +1,10 @@
 package gosh
 
 import (
-	"reflect"
 	"strings"
 	"sync"
-	"unsafe"
 
-	"github.com/ergochat/readline"
+	"github.com/phuslu/gosh/internal/readline"
 )
 
 type historySearch struct {
@@ -140,31 +138,7 @@ func setReadlineBuffer(rl *readline.Instance, line []rune, pos int) bool {
 	if rl == nil {
 		return false
 	}
-	if pos < 0 {
-		pos = 0
-	} else if pos > len(line) {
-		pos = len(line)
-	}
-	// ergochat/readline does not yet export a way to prefill the buffer with
-	// a specific cursor offset, so reach the unexported operation.runeBuffer
-	// reflectively and invoke its exported SetWithIdx method. This preserves
-	// upstream's locking and redraw behavior and can be replaced with the
-	// public Instance.SetBufferWithCursor once it is released upstream
-	// (https://github.com/ergochat/readline/pull/80).
-	op := reflect.ValueOf(rl).Elem().FieldByName("operation")
-	if !op.IsValid() || op.Kind() != reflect.Pointer || op.IsNil() {
-		return false
-	}
-	bufField := op.Elem().FieldByName("buf")
-	if !bufField.IsValid() || !bufField.CanAddr() || bufField.Kind() != reflect.Pointer || bufField.IsNil() {
-		return false
-	}
-	bufPtr := reflect.NewAt(bufField.Type(), unsafe.Pointer(bufField.UnsafeAddr())).Elem()
-	method := bufPtr.MethodByName("SetWithIdx")
-	if !method.IsValid() {
-		return false
-	}
-	method.Call([]reflect.Value{reflect.ValueOf(pos), reflect.ValueOf(line)})
+	rl.SetBufferWithCursor(string(line), pos)
 	return true
 }
 

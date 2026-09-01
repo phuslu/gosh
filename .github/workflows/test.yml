@@ -25,10 +25,9 @@ jobs:
       - name: Check module tidiness
         run: go mod tidy -diff
 
-      - name: Check pinned dependencies
+      - name: Check pinned mvdan version
         run: |
           test "$(go list -m -f '{{.Version}}' mvdan.cc/sh/v3)" = 'v3.14.0'
-          test "$(go list -m -f '{{.Version}}' github.com/ergochat/readline)" = 'v0.1.3'
 
       - name: Vet
         run: go vet ./...

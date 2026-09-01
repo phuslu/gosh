@@ -134,13 +134,6 @@ func main() {
 }
 ```
 
-Interactive sessions whose input is a terminal device are bridged through an
-internal pipe so that readline can use read deadlines; the goroutine that pumps
-terminal input into that pipe lives for the process lifetime. Keep this in
-mind when embedding gosh: give each interactive `Run` call its own input
-source, and do not reuse the same terminal `*os.File` across concurrent `Run`
-calls, or the sessions will compete for the same input stream.
-
 ## Compatibility notes
 
 `gosh` is Bash-flavored, not a byte-for-byte Bash replacement. Shell syntax and

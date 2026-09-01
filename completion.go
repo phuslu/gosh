@@ -14,7 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/ergochat/readline"
+	"github.com/phuslu/gosh/internal/readline"
 	"mvdan.cc/sh/v3/interp"
 )
 

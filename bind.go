@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ergochat/readline"
+	"github.com/phuslu/gosh/internal/readline"
 )
 
 type keyBindingManager struct {
@@ -227,12 +227,11 @@ func trimOuterQuotes(s string) string {
 }
 
 type keyBindingInput struct {
-	src   io.Reader
-	mgr   *keyBindingManager
-	probe *dsrProbe
-	buf   []byte
-	out   []byte
-	tmp   [64]byte
+	src io.Reader
+	mgr *keyBindingManager
+	buf []byte
+	out []byte
+	tmp [64]byte
 
 	needMore bool
 }
@@ -247,23 +246,13 @@ func (r *keyBindingInput) Read(p []byte) (int, error) {
 	for len(r.out) == 0 {
 		var deadliner readDeadliner
 		deadlineSet := false
-		if d, ok := r.src.(readDeadliner); ok {
-			// Poll while idle so a pending DSR probe can be answered even
-			// when the terminal never replies; keep the shorter deadline for
-			// ambiguous key prefixes.
-			timeout := dsrProbeTimeout
-			if r.needMore && len(r.buf) > 0 {
-				timeout = keyBindingPrefixTimeout
+		if r.needMore && len(r.buf) > 0 {
+			if d, ok := r.src.(readDeadliner); ok {
+				if err := d.SetReadDeadline(time.Now().Add(keyBindingPrefixTimeout)); err == nil {
+					deadliner = d
+					deadlineSet = true
+				}
 			}
-			if err := d.SetReadDeadline(time.Now().Add(timeout)); err == nil {
-				deadliner = d
-				deadlineSet = true
-			}
-		} else if r.probe.disarm() {
-			// Without read deadlines there is no way to interrupt a blocked
-			// read, so answer an armed probe before blocking on the next one.
-			r.out = append(r.out, dsrProbeResponse...)
-			break
 		}
 		n, err := r.src.Read(r.tmp[:])
 		if deadlineSet {
@@ -272,25 +261,15 @@ func (r *keyBindingInput) Read(p []byte) (int, error) {
 		if n > 0 {
 			r.buf = append(r.buf, r.tmp[:n]...)
 			r.needMore = r.processBuffer()
-			if r.probe.disarm() && !containsCPRResponse(r.tmp[:n]) {
-				r.out = append(r.out, dsrProbeResponse...)
-			}
 		}
 		if len(r.out) > 0 {
 			break
 		}
 		if err != nil {
-			if isReadTimeout(err) {
-				if r.needMore && len(r.buf) > 0 {
-					r.out = append(r.out, r.buf[0])
-					r.buf = r.buf[1:]
-					r.needMore = r.processBuffer()
-					continue
-				}
-				if r.probe.disarm() {
-					r.out = append(r.out, dsrProbeResponse...)
-					continue
-				}
+			if isReadTimeout(err) && len(r.buf) > 0 {
+				r.out = append(r.out, r.buf[0])
+				r.buf = r.buf[1:]
+				r.needMore = r.processBuffer()
 				continue
 			}
 			if err == io.EOF {
@@ -299,6 +278,9 @@ func (r *keyBindingInput) Read(p []byte) (int, error) {
 					r.buf = nil
 					r.needMore = false
 					continue
+				}
+				if len(r.out) > 0 {
+					break
 				}
 			}
 			return 0, err
