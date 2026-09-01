@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/chzyer/readline"
+	"github.com/ergochat/readline"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -204,14 +204,14 @@ func (r *reader) saveHistoryLine(line string) {
 		return
 	}
 	if r.history == nil {
-		_ = r.rl.SaveHistory(line)
+		_ = r.rl.SaveToHistory(line)
 		return
 	}
 	if r.history.Add(line) {
-		_ = r.rl.SaveHistory(line)
+		_ = r.rl.SaveToHistory(line)
 		return
 	}
-	_ = r.rl.SaveHistory("")
+	_ = r.rl.SaveToHistory("")
 }
 
 func historyLine(lines []string) string {

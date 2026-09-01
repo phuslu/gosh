@@ -14,7 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/chzyer/readline"
+	"github.com/ergochat/readline"
 	"mvdan.cc/sh/v3/interp"
 )
 
@@ -658,7 +658,7 @@ func (c *autoCompleter) printMatches(options []string) {
 	}
 	c.printPromptPrefix()
 	if rl := c.readline(); rl != nil {
-		rl.Operation.Refresh()
+		rl.Refresh()
 	}
 }
 
@@ -679,13 +679,13 @@ func (c *autoCompleter) printPromptPrefix() {
 
 func (c *autoCompleter) screenWidth() int {
 	if rl := c.readline(); rl != nil {
-		if rl.Config != nil && rl.Config.FuncGetWidth != nil {
-			if width := rl.Config.FuncGetWidth(); width > 0 {
+		if cfg := rl.GetConfig(); cfg != nil && cfg.FuncGetSize != nil {
+			if width, _ := cfg.FuncGetSize(); width > 0 {
 				return width
 			}
 		}
 	}
-	if width := readline.GetScreenWidth(); width > 0 {
+	if width := terminalWidth(c.stdout); width > 0 {
 		return width
 	}
 	return 80

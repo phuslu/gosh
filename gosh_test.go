@@ -9,8 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
-	"github.com/chzyer/readline"
+	"github.com/ergochat/readline"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
@@ -350,27 +351,55 @@ func TestHistorySearchKeepsCursorAtSearchPosition(t *testing.T) {
 	}
 }
 
-func TestHistorySearchCursorMoveUsesAbsolutePositioning(t *testing.T) {
-	line := []rune(strings.Repeat("a", 160))
-	got := string(cursorMoveFromEndSequence(2, line, 3, 80))
-	if want := "\x1b[2A\r\x1b[5C"; got != want {
-		t.Fatalf("cursor move sequence = %q, want %q", got, want)
-	}
-	if strings.Contains(got, "\b") {
-		t.Fatalf("cursor move sequence should not use backspace: %q", got)
-	}
-}
-
 func TestHistorySearchBellWritesDirectly(t *testing.T) {
 	var stdout bytes.Buffer
-	search := &historySearch{
-		rl: &readline.Instance{
-			Config: &readline.Config{Stdout: &stdout},
-		},
+	rl, err := readline.NewEx(&readline.Config{
+		Stdin:  strings.NewReader(""),
+		Stdout: &stdout,
+	})
+	if err != nil {
+		t.Fatalf("readline.NewEx failed: %v", err)
 	}
+	defer rl.Close()
+
+	search := &historySearch{rl: rl}
 	search.emitBell()
 	if got, want := stdout.Bytes(), []byte{0x07}; !bytes.Equal(got, want) {
 		t.Fatalf("bell output = %#v, want %#v", got, want)
+	}
+}
+
+func TestSetReadlineBufferReflection(t *testing.T) {
+	rl, err := readline.NewEx(&readline.Config{
+		Stdin:          strings.NewReader(""),
+		FuncIsTerminal: func() bool { return false },
+	})
+	if err != nil {
+		t.Fatalf("readline.NewEx failed: %v", err)
+	}
+	defer rl.Close()
+
+	if !setReadlineBuffer(rl, []rune("héllo"), 2) {
+		t.Fatalf("setReadlineBuffer returned false")
+	}
+
+	op := reflect.ValueOf(rl).Elem().FieldByName("operation")
+	if !op.IsValid() || op.Kind() != reflect.Pointer || op.IsNil() {
+		t.Fatalf("cannot locate operation field")
+	}
+	bufField := op.Elem().FieldByName("buf")
+	if !bufField.IsValid() || bufField.Kind() != reflect.Pointer || bufField.IsNil() {
+		t.Fatalf("cannot locate buf field")
+	}
+	bufPtr := reflect.NewAt(bufField.Type(), unsafe.Pointer(bufField.UnsafeAddr())).Elem()
+	buf := bufPtr.Elem()
+
+	out := buf.Addr().MethodByName("Runes").Call(nil)
+	if got := string(out[0].Interface().([]rune)); got != "héllo" {
+		t.Fatalf("buffer = %q, want %q", got, "héllo")
+	}
+	if idx := buf.FieldByName("idx").Int(); idx != 2 {
+		t.Fatalf("cursor = %d, want 2", idx)
 	}
 }
 

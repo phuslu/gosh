@@ -1,14 +1,12 @@
 package gosh
 
 import (
-	"bytes"
-	"fmt"
 	"reflect"
 	"strings"
 	"sync"
 	"unsafe"
 
-	"github.com/chzyer/readline"
+	"github.com/ergochat/readline"
 )
 
 type historySearch struct {
@@ -139,7 +137,7 @@ func (h *historySearch) setReadlineBuffer(line []rune, pos int) bool {
 }
 
 func setReadlineBuffer(rl *readline.Instance, line []rune, pos int) bool {
-	if rl == nil || rl.Operation == nil {
+	if rl == nil {
 		return false
 	}
 	if pos < 0 {
@@ -147,7 +145,13 @@ func setReadlineBuffer(rl *readline.Instance, line []rune, pos int) bool {
 	} else if pos > len(line) {
 		pos = len(line)
 	}
-	op := reflect.ValueOf(rl.Operation)
+	// ergochat/readline does not yet export a way to prefill the buffer with
+	// a specific cursor offset, so reach the unexported operation.runeBuffer
+	// reflectively and invoke its exported SetWithIdx method. This preserves
+	// upstream's locking and redraw behavior and can be replaced with the
+	// public Instance.SetBufferWithCursor once it is released upstream
+	// (https://github.com/ergochat/readline/pull/80).
+	op := reflect.ValueOf(rl).Elem().FieldByName("operation")
 	if !op.IsValid() || op.Kind() != reflect.Pointer || op.IsNil() {
 		return false
 	}
@@ -155,100 +159,13 @@ func setReadlineBuffer(rl *readline.Instance, line []rune, pos int) bool {
 	if !bufField.IsValid() || !bufField.CanAddr() || bufField.Kind() != reflect.Pointer || bufField.IsNil() {
 		return false
 	}
-	buf, ok := reflect.NewAt(bufField.Type(), unsafe.Pointer(bufField.UnsafeAddr())).Elem().Interface().(*readline.RuneBuffer)
-	if !ok || buf == nil {
+	bufPtr := reflect.NewAt(bufField.Type(), unsafe.Pointer(bufField.UnsafeAddr())).Elem()
+	method := bufPtr.MethodByName("SetWithIdx")
+	if !method.IsValid() {
 		return false
 	}
-	line = append([]rune(nil), line...)
-	if pos == len(line) || !readlineBufferInteractive(buf) {
-		buf.SetWithIdx(pos, line)
-		return true
-	}
-	width := readlineBufferWidth(buf)
-	if width <= 0 {
-		buf.SetWithIdx(pos, line)
-		return true
-	}
-	// chzyer/readline moves back from the end with one backspace per rune.
-	// Across wrapped long lines that can overrun on some terminals, so draw the
-	// full match at the end and then reposition by row and column.
-	promptWidth := buf.PromptLen()
-	buf.SetWithIdx(len(line), line)
-	if seq := cursorMoveFromEndSequence(promptWidth, line, pos, width); len(seq) > 0 && rl.Terminal != nil {
-		_, _ = rl.Terminal.Write(seq)
-	}
-	buf.Lock()
-	ok = setReadlineBufferIndexLocked(buf, pos)
-	buf.Unlock()
-	if !ok {
-		buf.SetWithIdx(pos, line)
-	}
+	method.Call([]reflect.Value{reflect.ValueOf(pos), reflect.ValueOf(line)})
 	return true
-}
-
-func readlineBufferInteractive(buf *readline.RuneBuffer) bool {
-	v := reflect.ValueOf(buf)
-	if !v.IsValid() || v.Kind() != reflect.Pointer || v.IsNil() {
-		return false
-	}
-	field := v.Elem().FieldByName("interactive")
-	return field.IsValid() && field.Kind() == reflect.Bool && field.Bool()
-}
-
-func readlineBufferWidth(buf *readline.RuneBuffer) int {
-	v := reflect.ValueOf(buf)
-	if !v.IsValid() || v.Kind() != reflect.Pointer || v.IsNil() {
-		return 0
-	}
-	field := v.Elem().FieldByName("width")
-	if !field.IsValid() || field.Kind() != reflect.Int {
-		return 0
-	}
-	return int(field.Int())
-}
-
-func setReadlineBufferIndexLocked(buf *readline.RuneBuffer, pos int) bool {
-	v := reflect.ValueOf(buf)
-	if !v.IsValid() || v.Kind() != reflect.Pointer || v.IsNil() {
-		return false
-	}
-	field := v.Elem().FieldByName("idx")
-	if !field.IsValid() || !field.CanAddr() || field.Kind() != reflect.Int {
-		return false
-	}
-	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().SetInt(int64(pos))
-	return true
-}
-
-func cursorMoveFromEndSequence(promptWidth int, line []rune, pos, width int) []byte {
-	if width <= 0 || pos >= len(line) {
-		return nil
-	}
-	if pos < 0 {
-		pos = 0
-	}
-	runes := readline.Runes{}
-	targetRow, targetCol := terminalRowCol(promptWidth+runes.WidthAll(line[:pos]), width)
-	endRow, _ := terminalRowCol(promptWidth+runes.WidthAll(line), width)
-	if endRow < targetRow {
-		return nil
-	}
-	var buf bytes.Buffer
-	if rows := endRow - targetRow; rows > 0 {
-		fmt.Fprintf(&buf, "\x1b[%dA", rows)
-	}
-	buf.WriteByte('\r')
-	if targetCol > 0 {
-		fmt.Fprintf(&buf, "\x1b[%dC", targetCol)
-	}
-	return buf.Bytes()
-}
-
-func terminalRowCol(cells, width int) (int, int) {
-	if width <= 0 {
-		return 0, cells
-	}
-	return cells / width, cells % width
 }
 
 func (h *historySearch) currentPrefixLocked() string {
@@ -269,11 +186,7 @@ func (h *historySearch) emitBell() {
 	if rl == nil {
 		return
 	}
-	if rl.Terminal != nil {
-		_, _ = rl.Terminal.Write([]byte{0x07})
-		return
-	}
-	if rl.Config != nil && rl.Config.Stdout != nil {
-		_, _ = rl.Config.Stdout.Write([]byte{0x07})
+	if cfg := rl.GetConfig(); cfg != nil && cfg.Stdout != nil {
+		_, _ = cfg.Stdout.Write([]byte{0x07})
 	}
 }

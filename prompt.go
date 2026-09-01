@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/term"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -21,6 +22,23 @@ func defaultPrompt(version string) string {
 		symbol = "#"
 	}
 	return "sh-" + shortVersion(version) + symbol + " "
+}
+
+func terminalWidth(w io.Writer) int {
+	width, _ := terminalSize(w)
+	return width
+}
+
+func terminalSize(w io.Writer) (int, int) {
+	file, ok := w.(*os.File)
+	if !ok {
+		return 0, 0
+	}
+	width, height, err := term.GetSize(int(file.Fd()))
+	if err != nil {
+		return 0, 0
+	}
+	return width, height
 }
 
 func shortVersion(version string) string {

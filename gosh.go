@@ -9,7 +9,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/chzyer/readline"
+	"github.com/ergochat/readline"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
@@ -86,13 +86,15 @@ func Run(c Config) error {
 		c.OnPromptReset(ctx)
 	}
 	getScreenWidth := func() int {
-		return readline.GetScreenWidth()
+		width, _ := terminalSize(stdout)
+		return width
 	}
-	readlineWidth := func() int {
-		if w := getScreenWidth(); w > 0 {
-			return w
+	readlineSize := func() (int, int) {
+		width, height := terminalSize(stdout)
+		if width <= 0 {
+			width = 80
 		}
-		return 80
+		return width, height
 	}
 
 	opts := []interp.RunnerOption{
@@ -189,8 +191,9 @@ func Run(c Config) error {
 		return enabled
 	}
 
-	conWriter := ptyNewConsoleANSIWriter(stderr)
-	boundStdin := &keyBindingInput{src: stdin, mgr: bindings}
+	probe := &dsrProbe{}
+	conWriter := newDSRWriter(ptyNewConsoleANSIWriter(stderr), probe)
+	boundStdin := &keyBindingInput{src: probeableStdin(stdin), mgr: bindings, probe: probe}
 	promptPrinter := &promptPrinter{}
 	completer := &autoCompleter{ctx: ctx, runner: runner, stdin: stdin, stdout: conWriter, stderr: conWriter, promptPrinter: promptPrinter}
 	historySearch := &historySearch{history: history, searchIndex: -1}
@@ -202,21 +205,19 @@ func Run(c Config) error {
 		DisableAutoSaveHistory: true,
 		InterruptPrompt:        "^C",
 		EOFPrompt:              "exit",
-		Stdin:                  readline.NewCancelableStdin(boundStdin),
 		Stdout:                 conWriter,
 		Stderr:                 conWriter,
 		AutoComplete:           completer,
-		Listener:               historySearch,
-		FuncGetWidth: func() int {
-			return readlineWidth()
-		},
+		Listener:               historySearch.OnChange,
+		FuncGetSize:            readlineSize,
+		Stdin:                  boundStdin,
 	})
 	if err != nil {
 		return err
 	}
 	_ = history.LoadFile(histFile)
 	for _, entry := range history.Entries() {
-		_ = rl.SaveHistory(entry)
+		_ = rl.SaveToHistory(entry)
 	}
 	completer.attach(rl)
 	historySearch.Attach(rl)
