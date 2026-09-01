@@ -1,6 +1,9 @@
 package readline
 
 import (
+	"bufio"
+	"bytes"
+	"strings"
 	"testing"
 	"time"
 )
@@ -49,5 +52,32 @@ func TestSetBufferWithCursor(t *testing.T) {
 	rl.SetBufferWithCursor("abc", 100)
 	if idx := rl.operation.buf.idx; idx != 3 {
 		t.Fatalf("oversized pos clamped to %d, want 3", idx)
+	}
+}
+
+func TestEscapeBackspaceAndCtrlModifierMapping(t *testing.T) {
+	for _, seq := range []string{"\x1b\x08", "\x1b\x7f"} {
+		buf := bufio.NewReader(strings.NewReader(seq))
+		if r, _, err := buf.ReadRune(); err != nil || r != '\x1b' {
+			t.Fatalf("could not consume ESC for %q: %v", seq, err)
+		}
+		result, err := (&terminal{}).consumeANSIEscape(buf, &bytes.Buffer{})
+		if err != nil {
+			t.Fatalf("consumeANSIEscape(%q) failed: %v", seq, err)
+		}
+		if !result.ok || result.r != MetaBackspace {
+			t.Fatalf("consumeANSIEscape(%q) = %#v, want MetaBackspace", seq, result)
+		}
+	}
+
+	for payload, want := range map[string]bool{
+		"1;2": false,
+		"1;3": true,
+		"1;5": true,
+		"1;7": true,
+	} {
+		if got := altModifierEnabled([]byte(payload)); got != want {
+			t.Fatalf("altModifierEnabled(%q) = %v, want %v", payload, got, want)
+		}
 	}
 }
