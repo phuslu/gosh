@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -577,6 +578,87 @@ func TestSetReadlineBuffer(t *testing.T) {
 	if got, want := line, "hello"; got != want {
 		t.Fatalf("line = %q, want %q", got, want)
 	}
+}
+
+// TestSetReadlineBufferRedrawsWhilePrompting guards the interactive history
+// search path: replacing the buffer while a Readline call is prompting must
+// repaint the line without waiting for another keystroke.
+func TestSetReadlineBufferRedrawsWhilePrompting(t *testing.T) {
+	stdinR, stdinW := io.Pipe()
+	var out syncBuffer
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:         "p> ",
+		Stdin:          stdinR,
+		Stdout:         &out,
+		FuncIsTerminal: func() bool { return true },
+		FuncMakeRaw:    func() error { return nil },
+		FuncExitRaw:    func() error { return nil },
+		FuncGetSize:    func() (int, int) { return 80, 24 },
+	})
+	if err != nil {
+		t.Fatalf("readline.NewEx failed: %v", err)
+	}
+	defer rl.Close()
+
+	type result struct {
+		line string
+		err  error
+	}
+	res := make(chan result, 1)
+	go func() {
+		line, err := rl.ReadLine()
+		res <- result{line, err}
+	}()
+
+	waitForOutput(t, &out, "p> ", 2*time.Second)
+	if !setReadlineBuffer(rl, []rune("echo one"), 4) {
+		t.Fatalf("setReadlineBuffer returned false")
+	}
+	waitForOutput(t, &out, "echo one", 2*time.Second)
+
+	if _, err := stdinW.Write([]byte("\n")); err != nil {
+		t.Fatalf("write stdin failed: %v", err)
+	}
+	select {
+	case got := <-res:
+		if got.err != nil {
+			t.Fatalf("ReadLine failed: %v", got.err)
+		}
+		if got.line != "echo one" {
+			t.Fatalf("line = %q, want %q", got.line, "echo one")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("ReadLine did not return")
+	}
+}
+
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func waitForOutput(t *testing.T, s *syncBuffer, want string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if strings.Contains(s.String(), want) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %q in output %q", want, s.String())
 }
 
 func TestCompletionHelpers(t *testing.T) {

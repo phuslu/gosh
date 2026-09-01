@@ -139,6 +139,11 @@ func setReadlineBuffer(rl *readline.Instance, line []rune, pos int) bool {
 		return false
 	}
 	rl.SetBufferWithCursor(string(line), pos)
+	// SetBufferWithCursor updates the buffer without repainting, which is
+	// right for pre-Readline prefills. History search runs while a Readline
+	// call is prompting, so repaint explicitly: Refresh only draws when the
+	// instance is prompting, making it a no-op for prefills.
+	rl.Refresh()
 	return true
 }
 
