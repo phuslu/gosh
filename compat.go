@@ -136,6 +136,9 @@ func (d callDeps) rewriteShopt(ctx context.Context, args []string) ([]string, bo
 }
 
 func (d callDeps) rewriteSet(ctx context.Context, args []string) ([]string, bool) {
+	if d.opts != nil {
+		d.opts.recordSet(args[1:])
+	}
 	return handleSetVerboseOption(args)
 }
 
@@ -150,6 +153,9 @@ func (d callDeps) rewriteBuiltin(ctx context.Context, args []string) ([]string, 
 		return next, true
 	}
 	if len(args) >= 2 && args[1] == "set" {
+		if d.opts != nil {
+			d.opts.recordSet(args[2:])
+		}
 		if next, ok := handleSetVerboseOption(args[1:]); ok {
 			if len(next) == 1 && next[0] == ":" {
 				return next, true
@@ -176,6 +182,9 @@ func (d callDeps) rewriteCommand(ctx context.Context, args []string) ([]string, 
 		return next, true
 	}
 	if len(args) >= 2 && args[1] == "set" {
+		if d.opts != nil {
+			d.opts.recordSet(args[2:])
+		}
 		if next, ok := handleSetVerboseOption(args[1:]); ok {
 			if len(next) == 1 && next[0] == ":" {
 				return next, true

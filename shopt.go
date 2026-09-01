@@ -143,13 +143,6 @@ func backendExec(backend Backend) interp.ExecHandlerFunc {
 func execHandler(runner func() *interp.Runner, opts *shellOptions, execBackend interp.ExecHandlerFunc) func(interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 	return func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 		return func(ctx context.Context, args []string) error {
-			if len(args) > 0 && args[0] == "set" {
-				err := next(ctx, args)
-				if err == nil && opts != nil {
-					opts.recordSet(args[1:])
-				}
-				return err
-			}
 			if len(args) > 0 && args[0] == shoptCommand {
 				var r *interp.Runner
 				if runner != nil {

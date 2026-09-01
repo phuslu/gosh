@@ -957,6 +957,10 @@ func TestShoptSetMixedOptions(t *testing.T) {
 			if shopt -q -o noglob; then echo posix-set; else echo bad-posix-set; fi
 			shopt -u -o noglob
 			if shopt -q -o noglob; then echo bad-posix-unset; else echo posix-unset; fi
+			builtin set -o noglob
+			if shopt -q -o noglob; then echo builtin-posix-set; else echo bad-builtin-posix-set; fi
+			command set +o noglob
+			if shopt -q -o noglob; then echo bad-command-posix-unset; else echo command-posix-unset; fi
 		`},
 		Stdout:  &stdout,
 		Stderr:  &stderr,
@@ -971,6 +975,8 @@ func TestShoptSetMixedOptions(t *testing.T) {
 		"bash-unset",
 		"posix-set",
 		"posix-unset",
+		"builtin-posix-set",
+		"command-posix-unset",
 		"",
 	}, "\n")
 	if got := stdout.String(); got != want {
