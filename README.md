@@ -54,7 +54,9 @@ enabled
 - Prefix history search for the up/down arrow bindings.
 - Bash prompt escape rendering for common `PS1` and `PS2` sequences.
 - `bind` support for common cursor and history-search actions.
-- `history` builtin backed by `HISTFILE`, `HISTSIZE`, and `HISTCONTROL`.
+- Bash-compatible history: `HISTFILE` (default `~/.gosh_history`),
+  `HISTSIZE` (default 500), `HISTFILESIZE`, `HISTCONTROL`, and the
+  `cmdhist`/`lithist`/`histappend` shopt options.
 - `shopt -q` compatibility, including `builtin shopt -q` and
   `command shopt -q`.
 - Programmable completion via `complete`, `compgen`, and `compopt`, including
@@ -93,7 +95,8 @@ export SHELL=/bin/bash
 export PATH="$HOME/.local/bin:$PATH"
 
 export HISTFILE="$HOME/.gosh_history"
-export HISTSIZE=1000
+export HISTSIZE=500
+export HISTFILESIZE=500
 export HISTCONTROL=ignoreboth
 
 export PS1='\[\e]0;\h:\w\a\]\n\[\e[1;32m\]\u@\H\[\e[0;33m\] \w \[\e[0m[\D{%T}]\n\[\e[1;$((31+3*!$?))m\]\$\[\e[0m\] '
@@ -184,6 +187,18 @@ interactive workflows, not as a login-shell replacement.
 Job control (`jobs`, `fg`, `bg`, `disown`, and terminal process-group
 management) is intentionally outside the current roadmap and remains a known
 limitation.
+
+Interactive history follows Bash semantics for `cmdhist` and `lithist`:
+multi-line commands are stored as one entry by default, with newlines
+rewritten to the delimiters that keep the recalled command valid. `HISTSIZE`
+defaults to 500, `HISTFILESIZE` truncates the history file by entry count
+after loading and after the exit-time write, and `histappend` switches between
+rewriting and appending the file. When `HISTFILE` is unset, gosh uses its own
+`$HOME/.gosh_history` (disabled when `HOME` is missing) rather than Bash's
+`~/.bash_history`; set `HISTFILE` explicitly to share a file with Bash.
+Unlike Bash, gosh does not default `HISTFILESIZE` to `HISTSIZE`, so an unset
+`HISTFILESIZE` leaves the file untruncated, and multiline entries use the
+`# gosh-history-v1 <base64>` encoding introduced by earlier versions.
 
 As of `mvdan.cc/sh/v3` v3.14.0, `$-` only reports the interpreter's POSIX
 option flags, so Bash flags like `i`, `m`, `h`, `B`, `H`, and `s` are not

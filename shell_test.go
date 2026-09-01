@@ -64,8 +64,8 @@ func TestShellStateDoesNotLeakHostEnvironment(t *testing.T) {
 	if got := resolveShellHistoryFile(runner); got != "" {
 		t.Fatalf("history file leaked host HISTFILE: %q", got)
 	}
-	if got := resolveHistoryLimit(); got != 1000 {
-		t.Fatalf("default history limit = %d, want 1000", got)
+	if got := resolveHistoryLimit(); got != 500 {
+		t.Fatalf("default history limit = %d, want 500", got)
 	}
 }
 
@@ -190,7 +190,7 @@ func TestPromptTemplateCache(t *testing.T) {
 func TestHistoryAppendErrorIsReported(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing-dir", "history")
 	var reported error
-	h := &history{file: missing, onError: func(err error) { reported = err }}
+	h := &history{cfg: historyConfig{inMemoryLimit: 10, file: missing}, onError: func(err error) { reported = err }}
 	h.Add("echo lost")
 	if reported == nil {
 		t.Fatal("history onError hook was not invoked")

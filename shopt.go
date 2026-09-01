@@ -341,7 +341,8 @@ func shoptArgsHaveManagedOption(args []string) bool {
 
 func shoptManagedOption(name string) bool {
 	switch name {
-	case "checkwinsize", "failglob", "histappend", "hostcomplete", "progcomp", "promptvars":
+	case "checkwinsize", "cmdhist", "failglob", "histappend", "hostcomplete",
+		"lithist", "progcomp", "promptvars":
 		return true
 	}
 	return false

@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,10 +17,22 @@ import (
 	"mvdan.cc/sh/v3/interp"
 )
 
+// historyConfig groups the settings derived from the history-related shell
+// variables for one history store. cmdhist and lithist are shopt options and
+// are read from the shell option state instead of living here.
+type historyConfig struct {
+	// inMemoryLimit is HISTSIZE: negative means unlimited, zero disables
+	// history, and a positive value keeps only that many recent entries.
+	inMemoryLimit int
+	// fileLimit is HISTFILESIZE: a non-negative value truncates the history
+	// file to that many entries; a negative value means "no truncation".
+	fileLimit int
+	control   historyControl
+	file      string
+}
+
 type history struct {
-	limit       int
-	control     historyControl
-	file        string
+	cfg         historyConfig
 	appendOnAdd func() bool
 	resync      func()
 	onError     func(error)
@@ -33,25 +46,68 @@ type historyControl struct {
 	ignoreSpace bool
 }
 
+// defaultHistoryLimit mirrors Bash's HISTSIZE default.
+const defaultHistoryLimit = 500
+
+// readlineHistoryLimit adapts gosh's in-memory limit to the in-tree readline
+// configuration, whose zero value means "use its default cap". The gosh
+// history store remains authoritative for search and the history builtins.
+func readlineHistoryLimit(limit int) int {
+	switch {
+	case limit > 0:
+		return limit
+	case limit < 0:
+		return 0
+	default:
+		return 1
+	}
+}
+
 func resolveHistoryLimit() int {
-	return 1000
+	return defaultHistoryLimit
 }
 
 func resolveShellHistoryLimit(runner *interp.Runner) int {
 	if val, ok := runnerStringVar(runner, "HISTSIZE"); ok {
-		if n := parseHistoryLimit(val); n > 0 {
-			return n
-		}
+		return parseHistorySize(val)
 	}
 	return resolveHistoryLimit()
 }
 
-func parseHistoryLimit(val string) int {
-	n, err := strconv.Atoi(strings.TrimSpace(val))
-	if err != nil || n <= 0 {
-		return 0
+// parseHistorySize follows Bash's startup behavior for HISTSIZE: a missing
+// value means the default (handled by the caller), while a negative, empty,
+// or non-numeric value means unlimited history.
+func parseHistorySize(val string) int {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return -1
+	}
+	n, err := strconv.Atoi(val)
+	if err != nil || n < 0 {
+		return -1
 	}
 	return n
+}
+
+// parseHistoryFileLimit parses HISTFILESIZE. Any value that is not a plain
+// non-negative integer means "do not truncate the history file".
+func parseHistoryFileLimit(val string) int {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return -1
+	}
+	n, err := strconv.Atoi(val)
+	if err != nil || n < 0 {
+		return -1
+	}
+	return n
+}
+
+func resolveShellHistoryFileLimit(runner *interp.Runner) int {
+	if val, ok := runnerStringVar(runner, "HISTFILESIZE"); ok {
+		return parseHistoryFileLimit(val)
+	}
+	return -1
 }
 
 func resolveShellHistoryControl(runner *interp.Runner) historyControl {
@@ -79,12 +135,26 @@ func parseHistoryControl(val string) historyControl {
 	return control
 }
 
+// resolveShellHistoryFile resolves HISTFILE. An explicit non-empty value
+// wins, /dev/null disables file storage, and an unset HISTFILE falls back to
+// $HOME/.gosh_history when HOME exists.
 func resolveShellHistoryFile(runner *interp.Runner) string {
 	histFile, ok := runnerStringVar(runner, "HISTFILE")
-	if !ok || histFile == os.DevNull || histFile == "/dev/null" {
+	if !ok {
+		return defaultShellHistoryFile(runner)
+	}
+	if histFile == "" || histFile == os.DevNull || histFile == "/dev/null" {
 		return ""
 	}
 	return histFile
+}
+
+func defaultShellHistoryFile(runner *interp.Runner) string {
+	home, ok := runnerStringVar(runner, "HOME")
+	if !ok || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".gosh_history")
 }
 
 func runnerStringVar(runner *interp.Runner, name string) (string, bool) {
@@ -138,11 +208,15 @@ func (h *history) Add(line string) bool {
 		return false
 	}
 	h.mu.Lock()
-	if h.control.ignoreSpace && strings.HasPrefix(line, " ") {
+	if h.cfg.inMemoryLimit == 0 {
 		h.mu.Unlock()
 		return false
 	}
-	if h.control.ignoreDups && len(h.entries) > 0 && h.entries[len(h.entries)-1] == line {
+	if h.cfg.control.ignoreSpace && strings.HasPrefix(line, " ") {
+		h.mu.Unlock()
+		return false
+	}
+	if h.cfg.control.ignoreDups && len(h.entries) > 0 && h.entries[len(h.entries)-1] == line {
 		h.mu.Unlock()
 		return false
 	}
@@ -167,13 +241,16 @@ func (h *history) append(line string) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.cfg.inMemoryLimit == 0 {
+		return
+	}
 	h.appendLocked(line)
 }
 
 func (h *history) appendLocked(line string) {
 	h.entries = append(h.entries, line)
-	if h.limit > 0 && len(h.entries) > h.limit {
-		h.entries = h.entries[len(h.entries)-h.limit:]
+	if h.cfg.inMemoryLimit > 0 && len(h.entries) > h.cfg.inMemoryLimit {
+		h.entries = h.entries[len(h.entries)-h.cfg.inMemoryLimit:]
 	}
 }
 
@@ -230,10 +307,10 @@ func (h *history) Delete(pos int) bool {
 }
 
 func (h *history) appendFile(line string) error {
-	if h == nil || h.file == "" {
+	if h == nil || h.cfg.file == "" {
 		return nil
 	}
-	file, err := os.OpenFile(h.file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
+	file, err := os.OpenFile(h.cfg.file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
 	if err != nil {
 		return err
 	}
@@ -261,10 +338,10 @@ func (h *history) fileDirty() bool {
 }
 
 func (h *history) RewriteFile() error {
-	if h == nil || h.file == "" {
+	if h == nil || h.cfg.file == "" {
 		return nil
 	}
-	return h.WriteFile(h.file)
+	return h.WriteFile(h.cfg.file)
 }
 
 // WriteFile writes all entries to name (or the configured history file when
@@ -274,7 +351,7 @@ func (h *history) WriteFile(name string) error {
 		return nil
 	}
 	if name == "" {
-		name = h.file
+		name = h.cfg.file
 	}
 	if name == "" {
 		return fmt.Errorf("history: no history file")
@@ -293,7 +370,7 @@ func (h *history) WriteFile(name string) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	if name == h.file {
+	if name == h.cfg.file {
 		h.mu.Lock()
 		h.dirtyFile = false
 		h.mu.Unlock()
@@ -309,7 +386,7 @@ func (h *history) ReadFile(name string) error {
 		return nil
 	}
 	if name == "" {
-		name = h.file
+		name = h.cfg.file
 	}
 	if name == "" {
 		return fmt.Errorf("history: no history file")
@@ -321,6 +398,45 @@ func (h *history) ReadFile(name string) error {
 		h.resync()
 	}
 	return nil
+}
+
+// TruncateFile truncates the configured history file to at most HISTFILESIZE
+// entries. Entries are stored one per physical line, so the entry count is
+// the line count. Negative limits disable truncation.
+func (h *history) TruncateFile() error {
+	if h == nil || h.cfg.file == "" || h.cfg.fileLimit < 0 {
+		return nil
+	}
+	return truncateHistoryFile(h.cfg.file, h.cfg.fileLimit)
+}
+
+func truncateHistoryFile(name string, limit int) error {
+	if limit < 0 {
+		return nil
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	if n := len(lines); n > 0 && lines[n-1] == "" {
+		lines = lines[:n-1]
+	}
+	if len(lines) <= limit {
+		return nil
+	}
+	keep := lines[len(lines)-limit:]
+	if limit == 0 {
+		keep = nil
+	}
+	out := strings.Join(keep, "\n")
+	if len(keep) > 0 {
+		out += "\n"
+	}
+	return os.WriteFile(name, []byte(out), 0o666)
 }
 
 const historyEncodedPrefix = "# gosh-history-v1 "

@@ -160,3 +160,181 @@ func TestDifferentialNonInteractiveStdin(t *testing.T) {
 		t.Fatalf("stdout mismatch:\nbash: %q\ngosh: %q\ngosh stderr: %q", bash.stdout, gosh.stdout, gosh.stderr)
 	}
 }
+
+// runInteractiveHistory runs an interactive shell on piped input with a
+// private history file and returns everything it printed to stdout.
+func runInteractiveHistory(t *testing.T, binary, argv0 string, extraArgs []string, lines []string, env []string) differentialShellResult {
+	t.Helper()
+	args := extraArgs
+	if argv0 != "" {
+		args = append([]string{argv0}, extraArgs...)
+	}
+	return runDifferentialShell(t, binary, args, lines, env, "")
+}
+
+// historyEnv builds the environment shared by the interactive history
+// differential tests, with host history settings stripped out.
+func historyEnv(t *testing.T, histFile string) []string {
+	t.Helper()
+	return []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + t.TempDir(),
+		"HISTFILE=" + histFile,
+		"HISTSIZE=",
+		"HISTFILESIZE=",
+		"HISTCONTROL=",
+		"GOSH_ENV=",
+	}
+}
+
+func TestDifferentialHistoryCmdhist(t *testing.T) {
+	cases := []struct {
+		name  string
+		lines []string
+	}{
+		{"if", []string{"if true; then", "echo hi", "fi"}},
+		{"pipeline", []string{"echo a |", "cat"}},
+		{"pipeline trailing space", []string{"echo a | ", "cat"}},
+		{"for", []string{"for x in 1; do", "echo x", "done"}},
+		{"for in", []string{"for i", "in a b; do", "echo $i", "done"}},
+		{"for do", []string{"for x", "do", "echo x", "done"}},
+		{"brace group", []string{"{", "echo a", "echo b", "}"}},
+		{"brace blank", []string{"{", "", "echo a", "}"}},
+		{"brace blank after word", []string{"{ echo a", "", "}"}},
+		{"case", []string{"case $x in a)", "echo x;", ";;", "esac"}},
+		{"while", []string{"while true; do", "echo x", "break", "done"}},
+		{"until", []string{"until false; do", "echo x", "break", "done"}},
+		{"nested for", []string{"for x in a; do", "for y in b; do", "echo $x $y", "done", "done"}},
+		{"if elif else", []string{"if true; then", "echo a", "elif false; then", "echo b", "else", "echo c", "fi"}},
+		{"function braces", []string{"f() {", "echo hi", "}"}},
+		{"function name", []string{"function f", "echo hi"}},
+		{"subshell", []string{"(echo a", "echo b)"}},
+		{"compound assignment", []string{"arr=(", "one two", "three", ")"}},
+		{"backslash continuation", []string{"echo a \\", "echo b"}},
+		{"single quote", []string{"echo 'a", "b'"}},
+		{"double quote", []string{"echo \"c", "d\""}},
+		{"command substitution", []string{"x=$(echo a", "echo b)"}},
+		{"quotes in substitution", []string{"x=$(a", "\"b", "c\")", "echo d"}},
+		{"arithmetic expansion", []string{"echo $((1 +", "2))"}},
+		{"comment dropped", []string{"if true; then", "# comment", "echo hi", "fi"}},
+		{"trailing comment", []string{"if true; then", "echo a # trailing", "fi"}},
+		{"heredoc in compound", []string{"{ cat <<EOF", "x", "EOF", "echo done", "}"}},
+		{"two heredocs", []string{"{ cat <<A", "a1", "A", "cat <<B", "b1", "B", "}"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			script := append(append([]string{}, tc.lines...), "history", "exit")
+			bashFile := filepath.Join(t.TempDir(), "bash-history")
+			goshFile := filepath.Join(t.TempDir(), "gosh-history")
+			want := runInteractiveHistory(t, "bash", "", []string{"--noprofile", "--norc", "-i"}, script, historyEnv(t, bashFile))
+			got := runInteractiveHistory(t, testGoshBinary, "gosh", []string{"-i", "--norc"}, script, historyEnv(t, goshFile))
+			if got.stdout != want.stdout {
+				t.Fatalf("history output mismatch:\nbash: %q (stderr %q)\ngosh: %q (stderr %q)", want.stdout, want.stderr, got.stdout, got.stderr)
+			}
+		})
+	}
+}
+
+func TestDifferentialHistoryCmdhistOff(t *testing.T) {
+	script := []string{"shopt -u cmdhist", "if true; then", "echo hi", "fi", "history", "exit"}
+	bashFile := filepath.Join(t.TempDir(), "bash-history")
+	goshFile := filepath.Join(t.TempDir(), "gosh-history")
+	want := runInteractiveHistory(t, "bash", "", []string{"--noprofile", "--norc", "-i"}, script, historyEnv(t, bashFile))
+	got := runInteractiveHistory(t, testGoshBinary, "gosh", []string{"-i", "--norc"}, script, historyEnv(t, goshFile))
+	if got.stdout != want.stdout {
+		t.Fatalf("history output mismatch:\nbash: %q\ngosh: %q\ngosh stderr: %q", want.stdout, got.stdout, got.stderr)
+	}
+}
+
+func TestDifferentialHistoryLithist(t *testing.T) {
+	script := []string{"shopt -s lithist", "if true; then", "echo hi", "fi", "history", "exit"}
+	bashFile := filepath.Join(t.TempDir(), "bash-history")
+	goshFile := filepath.Join(t.TempDir(), "gosh-history")
+	want := runInteractiveHistory(t, "bash", "", []string{"--noprofile", "--norc", "-i"}, script, historyEnv(t, bashFile))
+	got := runInteractiveHistory(t, testGoshBinary, "gosh", []string{"-i", "--norc"}, script, historyEnv(t, goshFile))
+	if got.stdout != want.stdout {
+		t.Fatalf("history output mismatch:\nbash: %q\ngosh: %q\ngosh stderr: %q", want.stdout, got.stdout, got.stderr)
+	}
+}
+
+func TestDifferentialHistoryLimits(t *testing.T) {
+	t.Run("HISTSIZE", func(t *testing.T) {
+		script := []string{"echo 1", "echo 2", "echo 3"}
+		bashFile := filepath.Join(t.TempDir(), "bash-history")
+		goshFile := filepath.Join(t.TempDir(), "gosh-history")
+		bashEnv := append(historyEnv(t, bashFile), "HISTSIZE=2")
+		goshEnv := append(historyEnv(t, goshFile), "HISTSIZE=2")
+		runInteractiveHistory(t, "bash", "", []string{"--noprofile", "--norc", "-i"}, script, bashEnv)
+		runInteractiveHistory(t, testGoshBinary, "gosh", []string{"-i", "--norc"}, script, goshEnv)
+		bashData, err := os.ReadFile(bashFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		goshData, err := os.ReadFile(goshFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(goshData) != string(bashData) {
+			t.Fatalf("HISTSIZE=2 history file mismatch:\nbash: %q\ngosh: %q", bashData, goshData)
+		}
+	})
+
+	t.Run("HISTFILESIZE", func(t *testing.T) {
+		seed := strings.Join([]string{
+			"echo 1", "echo 2", "echo 3", "echo 4", "echo 5",
+			"echo 6", "echo 7", "echo 8", "echo 9", "echo 10",
+		}, "\n") + "\n"
+		bashFile := filepath.Join(t.TempDir(), "bash-history")
+		goshFile := filepath.Join(t.TempDir(), "gosh-history")
+		if err := os.WriteFile(bashFile, []byte(seed), 0o666); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(goshFile, []byte(seed), 0o666); err != nil {
+			t.Fatal(err)
+		}
+		script := []string{"echo new"}
+		bashEnv := append(historyEnv(t, bashFile), "HISTFILESIZE=3")
+		goshEnv := append(historyEnv(t, goshFile), "HISTFILESIZE=3")
+		runInteractiveHistory(t, "bash", "", []string{"--noprofile", "--norc", "-i"}, script, bashEnv)
+		runInteractiveHistory(t, testGoshBinary, "gosh", []string{"-i", "--norc"}, script, goshEnv)
+		bashData, err := os.ReadFile(bashFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		goshData, err := os.ReadFile(goshFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(goshData) != string(bashData) {
+			t.Fatalf("HISTFILESIZE=3 history file mismatch:\nbash: %q\ngosh: %q", bashData, goshData)
+		}
+	})
+
+	t.Run("HISTFILESIZE zero", func(t *testing.T) {
+		bashFile := filepath.Join(t.TempDir(), "bash-history")
+		goshFile := filepath.Join(t.TempDir(), "gosh-history")
+		seed := "echo 1\necho 2\n"
+		if err := os.WriteFile(bashFile, []byte(seed), 0o666); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(goshFile, []byte(seed), 0o666); err != nil {
+			t.Fatal(err)
+		}
+		script := []string{"echo new"}
+		bashEnv := append(historyEnv(t, bashFile), "HISTFILESIZE=0")
+		goshEnv := append(historyEnv(t, goshFile), "HISTFILESIZE=0")
+		runInteractiveHistory(t, "bash", "", []string{"--noprofile", "--norc", "-i"}, script, bashEnv)
+		runInteractiveHistory(t, testGoshBinary, "gosh", []string{"-i", "--norc"}, script, goshEnv)
+		bashData, err := os.ReadFile(bashFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		goshData, err := os.ReadFile(goshFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(goshData) != string(bashData) {
+			t.Fatalf("HISTFILESIZE=0 history file mismatch:\nbash: %q\ngosh: %q", bashData, goshData)
+		}
+	})
+}

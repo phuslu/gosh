@@ -262,7 +262,7 @@ func TestHistoryEncodingAndControl(t *testing.T) {
 		}
 	}
 
-	history := &history{limit: 10, control: parseHistoryControl("ignoreboth")}
+	history := &history{cfg: historyConfig{inMemoryLimit: 10, control: parseHistoryControl("ignoreboth")}}
 	if history.Add(" leading-space") {
 		t.Fatalf("history saved ignorespace entry")
 	}
@@ -284,8 +284,7 @@ func TestHistoryHistappendRewrite(t *testing.T) {
 	}
 
 	history := &history{
-		limit:       10,
-		file:        file,
+		cfg:         historyConfig{inMemoryLimit: 10, file: file},
 		appendOnAdd: func() bool { return false },
 	}
 	if err := history.LoadFile(file); err != nil {
@@ -317,7 +316,7 @@ func TestHistoryHistappendRewrite(t *testing.T) {
 }
 
 func TestHistoryBuiltinFlags(t *testing.T) {
-	h := &history{limit: 10}
+	h := &history{cfg: historyConfig{inMemoryLimit: 10}}
 	h.append("one")
 	h.append("two")
 	h.append("three")
@@ -379,7 +378,7 @@ func TestRunHistoryBuiltin(t *testing.T) {
 }
 
 func TestBuiltinFc(t *testing.T) {
-	h := &history{limit: 100}
+	h := &history{cfg: historyConfig{inMemoryLimit: 100}}
 	for i := 0; i < 20; i++ {
 		h.append(fmt.Sprintf("cmd-%d", i))
 	}
@@ -501,7 +500,7 @@ func TestHistorySearchKeepsCursorAtSearchPosition(t *testing.T) {
 	const long = `sed -i -E 's/const bufWriterPoolBufferSize = .+/var bufWriterPoolBufferSize = func() int { n, _ := strconv.Atoi(os.Getenv("HTTP2_WRITER_POOL_BUFFER_SIZE")); return max(n, 32768) }()/' /Users/xiangyu.lu/go/pkg/mod/golang.org/x/net@v0.54.0/http2/http2.go`
 	const short = `sed -n '1p' http2.go`
 
-	history := &history{limit: 10}
+	history := &history{cfg: historyConfig{inMemoryLimit: 10}}
 	history.append("echo ignored")
 	history.append(short)
 	history.append(long)
@@ -704,7 +703,7 @@ func TestPromptRenderer(t *testing.T) {
 }
 
 func TestPromptHistoryNumberEscape(t *testing.T) {
-	state := &promptState{history: &history{limit: 10}, seq: 9}
+	state := &promptState{history: &history{cfg: historyConfig{inMemoryLimit: 10}}, seq: 9}
 	state.history.append("one")
 	state.history.append("two")
 
@@ -1131,6 +1130,44 @@ func TestShoptHistappend(t *testing.T) {
 		"set",
 		"unset",
 		"histappend\ton",
+		"",
+	}, "\n")
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout = %q, want %q\nstderr: %s", got, want, stderr.String())
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestShoptCmdhistLithist(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args: []string{"gosh", "-c", `
+			if shopt -q cmdhist; then echo cmdhist-default-on; else echo bad-cmdhist-default; fi
+			if shopt -q lithist; then echo bad-lithist-default; else echo lithist-default-off; fi
+			shopt -u cmdhist
+			if shopt -q cmdhist; then echo bad-cmdhist-unset; else echo cmdhist-unset; fi
+			shopt -s lithist
+			if shopt -q lithist; then echo lithist-set; else echo bad-lithist-set; fi
+			shopt cmdhist
+			shopt lithist
+		`},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Env:     testEnv(t),
+		Version: "1.2.3",
+	})
+	if err != nil {
+		t.Fatalf("Run cmdhist/lithist shopt failed: %v\nstderr: %s", err, stderr.String())
+	}
+	want := strings.Join([]string{
+		"cmdhist-default-on",
+		"lithist-default-off",
+		"cmdhist-unset",
+		"lithist-set",
+		"cmdhist\toff",
+		"lithist\ton",
 		"",
 	}, "\n")
 	if got := stdout.String(); got != want {

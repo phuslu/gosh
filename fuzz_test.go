@@ -83,6 +83,24 @@ func FuzzDecodeHistoryLine(f *testing.F) {
 	})
 }
 
+func FuzzFormatHistoryEntries(f *testing.F) {
+	for _, seed := range []string{
+		"if true; then\necho hi\nfi",
+		"echo a |\ncat",
+		"{\necho a\n}\n",
+		"cat <<EOF\nx\nEOF",
+		"echo 'a\nb'",
+	} {
+		f.Add(seed, true, false)
+		f.Add(seed, true, true)
+		f.Add(seed, false, false)
+	}
+	f.Fuzz(func(t *testing.T, input string, cmdhist, lithist bool) {
+		lines := strings.Split(strings.ReplaceAll(input, "\r\n", "\n"), "\n")
+		_ = formatHistoryEntries(lines, cmdhist, lithist)
+	})
+}
+
 // splitFuzzArgs performs the same whitespace split as a shell's flag parser
 // tests; it is intentionally simple and only needs to avoid panics.
 func splitFuzzArgs(input string) []string {

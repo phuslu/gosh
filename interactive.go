@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/phuslu/gosh/internal/readline"
 	"mvdan.cc/sh/v3/interp"
@@ -160,6 +159,7 @@ type reader struct {
 	rl                  *readline.Instance
 	buf                 []byte // leftover bytes from the previous Readline call
 	history             *history
+	opts                *shellOptions
 	pendingHistoryLines []string
 }
 
@@ -197,9 +197,16 @@ func (r *reader) savePendingHistory() {
 	if len(r.pendingHistoryLines) == 0 {
 		return
 	}
-	line := historyLine(r.pendingHistoryLines)
+	lines := r.pendingHistoryLines
 	r.pendingHistoryLines = r.pendingHistoryLines[:0]
-	r.saveHistoryLine(line)
+	cmdhist, lithist := true, false
+	if r.opts != nil {
+		cmdhist = shoptEnabled(r.opts, "cmdhist")
+		lithist = shoptEnabled(r.opts, "lithist")
+	}
+	for _, entry := range formatHistoryEntries(lines, cmdhist, lithist) {
+		r.saveHistoryLine(entry)
+	}
 }
 
 func (r *reader) saveHistoryLine(line string) {
@@ -218,8 +225,4 @@ func (r *reader) saveHistoryLine(line string) {
 		return
 	}
 	_ = r.rl.SaveToHistory("")
-}
-
-func historyLine(lines []string) string {
-	return strings.Join(lines, "\n")
 }

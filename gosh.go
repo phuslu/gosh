@@ -203,7 +203,7 @@ func (s *Shell) initialize() error {
 	}
 
 	s.parser = syntax.NewParser()
-	s.history = &history{limit: resolveHistoryLimit()}
+	s.history = &history{cfg: historyConfig{inMemoryLimit: resolveHistoryLimit()}}
 	s.bindings = &keyBindingManager{entries: make(map[string]*goKeyBindingEntry)}
 	s.completion = newCompletionRegistry()
 	s.opts = newShellOptions(s.interactive)
@@ -366,14 +366,14 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 	currentPrompt := promptString(ctx, s.runner, s.opts, s.history, s.stdin, s.stderr, s.hostname, s.homeFallback, s.userFallback, "PS1", promptFallback, promptSeq, s.promptCache)
 	promptSeq++
 
-	// export HISTFILE=""
-	s.history.limit = resolveShellHistoryLimit(s.runner)
-	s.history.control = resolveShellHistoryControl(s.runner)
+	s.history.cfg.inMemoryLimit = resolveShellHistoryLimit(s.runner)
+	s.history.cfg.fileLimit = resolveShellHistoryFileLimit(s.runner)
+	s.history.cfg.control = resolveShellHistoryControl(s.runner)
 	s.history.onError = func(err error) {
 		fmt.Fprintln(s.stderr, "history:", err)
 	}
 	histFile := resolveShellHistoryFile(s.runner)
-	s.history.file = histFile
+	s.history.cfg.file = histFile
 	s.history.appendOnAdd = func() bool {
 		enabled, _ := shoptOptionEnabled(s.opts, false, "histappend")
 		return enabled
@@ -399,7 +399,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt:                 currentPrompt.prompt,
-		HistoryLimit:           s.history.limit,
+		HistoryLimit:           readlineHistoryLimit(s.history.cfg.inMemoryLimit),
 		DisableAutoSaveHistory: true,
 		InterruptPrompt:        "^C",
 		EOFPrompt:              "exit",
@@ -426,6 +426,9 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 	}
 	if err := s.history.LoadFile(histFile); err != nil {
 		fmt.Fprintln(rl.Stderr(), "failed to load history:", err)
+	}
+	if truncateErr := s.history.TruncateFile(); truncateErr != nil {
+		fmt.Fprintln(rl.Stderr(), "failed to truncate history:", truncateErr)
 	}
 	s.history.resync()
 	completer.attach(rl)
@@ -482,7 +485,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 	// io.Reader. Each call to Read invokes Readline() to fetch one line.
 	// Ctrl-C (ErrInterrupt) injects a newline to abandon the current
 	// incomplete statement. Ctrl-D / EOF returns io.EOF to end the session.
-	rdr := &reader{rl: rl, history: s.history}
+	rdr := &reader{rl: rl, history: s.history, opts: s.opts}
 
 	var exitErr error
 	err = runInteractiveParser(s.parser, rdr, func(stmts []*syntax.Stmt) bool {
@@ -517,6 +520,9 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 		if rewriteErr := s.history.RewriteFile(); rewriteErr != nil {
 			fmt.Fprintln(rl.Stderr(), "failed to rewrite history:", rewriteErr)
 		}
+	}
+	if truncateErr := s.history.TruncateFile(); truncateErr != nil {
+		fmt.Fprintln(rl.Stderr(), "failed to truncate history:", truncateErr)
 	}
 	if exitErr != nil {
 		return exitErr
