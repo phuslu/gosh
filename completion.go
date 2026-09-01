@@ -685,9 +685,6 @@ func (c *autoCompleter) screenWidth() int {
 			}
 		}
 	}
-	if width := terminalWidth(c.stdout); width > 0 {
-		return width
-	}
 	return 80
 }
 

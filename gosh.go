@@ -85,16 +85,16 @@ func Run(c Config) error {
 	if c.IsTerminal && c.OnPromptReset != nil {
 		c.OnPromptReset(ctx)
 	}
+	// getScreenWidth delegates to readline once the instance exists, keeping
+	// terminal size detection inside the vendored readline's platform code.
+	var rl *readline.Instance
 	getScreenWidth := func() int {
-		width, _ := terminalSize(stdout)
-		return width
-	}
-	readlineSize := func() (int, int) {
-		width, height := terminalSize(stdout)
-		if width <= 0 {
-			width = 80
+		if rl != nil {
+			if width, _ := rl.GetConfig().FuncGetSize(); width > 0 {
+				return width
+			}
 		}
-		return width, height
+		return 0
 	}
 
 	opts := []interp.RunnerOption{
@@ -175,7 +175,6 @@ func Run(c Config) error {
 		return runNonInteractiveStream(ctx, stdin, runner, stdout, stderr)
 	}
 
-	updateCheckwinsizeColumns(runner, getScreenWidth)
 	promptFallback := defaultPrompt(version)
 	promptSeq := 1
 	currentPrompt := promptString(ctx, runner, stdin, stderr, "PS1", promptFallback, promptSeq)
@@ -198,7 +197,7 @@ func Run(c Config) error {
 	historySearch := &historySearch{history: history, searchIndex: -1}
 	bindings.registerActionHandler(keyActionHistorySearchBackward, historySearch.Search)
 	bindings.registerActionHandler(keyActionHistorySearchForward, historySearch.Search)
-	rl, err := readline.NewEx(&readline.Config{
+	rl, err = readline.NewEx(&readline.Config{
 		Prompt:                 currentPrompt.prompt,
 		HistoryLimit:           history.limit,
 		DisableAutoSaveHistory: true,
@@ -208,7 +207,6 @@ func Run(c Config) error {
 		Stderr:                 conWriter,
 		AutoComplete:           completer,
 		Listener:               historySearch.OnChange,
-		FuncGetSize:            readlineSize,
 		Stdin:                  boundStdin,
 	})
 	if err != nil {
@@ -220,6 +218,7 @@ func Run(c Config) error {
 	}
 	completer.attach(rl)
 	historySearch.Attach(rl)
+	updateCheckwinsizeColumns(runner, getScreenWidth)
 	defer rl.Close()
 	promptPrinter.Print(rl.Stdout(), currentPrompt.prefix)
 	nextPrefix := ""
