@@ -185,7 +185,7 @@ func Run(c Config) error {
 
 	promptFallback := defaultPrompt(version)
 	promptSeq := 1
-	currentPrompt := promptString(ctx, runner, stdin, stderr, "PS1", promptFallback, promptSeq)
+	currentPrompt := promptString(ctx, runner, history, stdin, stderr, "PS1", promptFallback, promptSeq)
 	promptSeq++
 
 	// export HISTFILE=""
@@ -251,7 +251,7 @@ func Run(c Config) error {
 			c.OnPromptReset(ctx)
 		}
 		updateCheckwinsizeColumns(runner, getScreenWidth)
-		setPrompt(promptString(ctx, runner, stdin, stderr, "PS1", defaultPrompt(version), promptSeq))
+		setPrompt(promptString(ctx, runner, history, stdin, stderr, "PS1", defaultPrompt(version), promptSeq))
 		promptSeq++
 		flushPrefix()
 	}
@@ -269,7 +269,7 @@ func Run(c Config) error {
 		// unclosed if/for blocks). Switch to the continuation prompt and keep
 		// reading without executing anything yet.
 		if parser.Incomplete() {
-			setPrompt(promptString(ctx, runner, stdin, stderr, "PS2", "> ", promptSeq))
+			setPrompt(promptString(ctx, runner, history, stdin, stderr, "PS2", "> ", promptSeq))
 			flushPrefix()
 			return true
 		}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,7 +34,7 @@ func shortVersion(version string) string {
 	return version
 }
 
-func promptString(ctx context.Context, runner *interp.Runner, stdin io.Reader, stderr io.Writer, name, fallback string, seq int) promptParts {
+func promptString(ctx context.Context, runner *interp.Runner, history *history, stdin io.Reader, stderr io.Writer, name, fallback string, seq int) promptParts {
 	host := "localhost"
 	if h, err := os.Hostname(); err == nil {
 		host = h
@@ -50,6 +51,7 @@ func promptString(ctx context.Context, runner *interp.Runner, stdin io.Reader, s
 		dir:       runner.Dir,
 		host:      host,
 		shortHost: short,
+		history:   history,
 		seq:       seq,
 		now:       time.Now(),
 	}
@@ -106,6 +108,7 @@ type promptState struct {
 	dir       string
 	host      string
 	shortHost string
+	history   *history
 	seq       int
 	now       time.Time
 }
@@ -159,6 +162,15 @@ func (p *promptState) promptSymbol() string {
 		return "#"
 	}
 	return "$"
+}
+
+// historyNumber returns the number Bash assigns to the command about to be
+// entered: one past the current in-memory history count.
+func (p *promptState) historyNumber() string {
+	if p.history == nil {
+		return "0"
+	}
+	return strconv.Itoa(p.history.Len() + 1)
 }
 
 type promptRenderer struct {
@@ -262,8 +274,10 @@ func (r *promptRenderer) handleEscape(idx int) (string, int) {
 				return r.state.formatTime(format), start + end + 1
 			}
 		}
-	case '#', '!':
+	case '#':
 		return fmt.Sprintf("%d", r.state.seq), idx + 1
+	case '!':
+		return r.state.historyNumber(), idx + 1
 	case '\\':
 		return "\\", idx + 1
 	case '$':

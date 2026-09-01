@@ -549,6 +549,22 @@ func TestPromptRenderer(t *testing.T) {
 	}
 }
 
+func TestPromptHistoryNumberEscape(t *testing.T) {
+	state := &promptState{history: &history{limit: 10}, seq: 9}
+	state.history.append("one")
+	state.history.append("two")
+
+	got := (&promptRenderer{src: `\! \#`, state: state}).render()
+	if want := "3 9"; got != want {
+		t.Fatalf("rendered prompt = %q, want %q", got, want)
+	}
+
+	got = (&promptRenderer{src: `\!`, state: &promptState{}}).render()
+	if want := "0"; got != want {
+		t.Fatalf("rendered prompt without history = %q, want %q", got, want)
+	}
+}
+
 func TestPromptCommandSubstitutionKeepsOutputOnExitStatus(t *testing.T) {
 	ctx := context.Background()
 	var stdout, stderr bytes.Buffer

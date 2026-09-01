@@ -189,6 +189,16 @@ func (h *history) Entries() []string {
 	return out
 }
 
+// Len returns the number of in-memory history entries.
+func (h *history) Len() int {
+	if h == nil {
+		return 0
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.entries)
+}
+
 // Clear forgets all in-memory entries without touching the history file.
 func (h *history) Clear() {
 	if h == nil {
