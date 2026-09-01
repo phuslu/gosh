@@ -57,9 +57,14 @@ enabled
 - `history` builtin backed by `HISTFILE`, `HISTSIZE`, and `HISTCONTROL`.
 - `shopt -q` compatibility, including `builtin shopt -q` and
   `command shopt -q`.
+- Programmable completion via `complete`, `compgen`, and `compopt`, including
+  `COMP_WORDS`, `COMP_CWORD`, `COMP_LINE`, `COMP_POINT`, and `COMPREPLY`.
+- A replaceable execution/filesystem `Backend`, so the same shell can run
+  against the host, a sandbox, a mock filesystem, or a remote executor.
 - `BASH_VERSION` compatibility variable and a `GOSH_INTERACTIVE` marker for
   interactive startup files.
-- Programmatic use through `gosh.Run`.
+- Programmatic use through `gosh.Run` or a reusable `gosh.Shell` created with
+  `gosh.New` and driven with `Eval` and `Interactive`.
 
 ## Configuration
 
@@ -108,6 +113,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 
 	"github.com/phuslu/gosh"
@@ -134,6 +140,36 @@ func main() {
 }
 ```
 
+For an embedder that wants to keep shell state across evaluations, use `New`:
+
+```go
+shell, err := gosh.New(gosh.Config{
+	Stdout: &stdout,
+	Stderr: &stderr,
+	Env: []string{"PATH=/usr/bin:/bin", "HOME=/tmp"},
+})
+if err != nil {
+	panic(err)
+}
+if err := shell.Eval(context.Background(), `greeting=hello`); err != nil {
+	panic(err)
+}
+if err := shell.Eval(context.Background(), `printf '%s\n' "$greeting"`); err != nil {
+	panic(err)
+}
+```
+
+`Config.Backend` implements the interpreter's process and filesystem hooks,
+making gosh suitable as a controlled shell runtime:
+
+```go
+err := gosh.Run(gosh.Config{
+	Stdout: &stdout,
+	Stderr: &stderr,
+	Backend: sandboxBackend, // Exec/Open/Stat/ReadDir/Access
+})
+```
+
 ## Compatibility notes
 
 `gosh` is Bash-flavored, not a byte-for-byte Bash replacement. Shell syntax and
@@ -144,6 +180,10 @@ Some Bash features that depend on a full POSIX job-control shell, a PTY-managed
 process tree, or Bash internals may behave differently. Treat `gosh` as a small,
 embeddable shell with strong Bash compatibility for common scripts and
 interactive workflows, not as a login-shell replacement.
+
+Job control (`jobs`, `fg`, `bg`, `disown`, and terminal process-group
+management) is intentionally outside the current roadmap and remains a known
+limitation.
 
 As of `mvdan.cc/sh/v3` v3.14.0, `$-` only reports the interpreter's POSIX
 option flags, so Bash flags like `i`, `m`, `h`, `B`, `H`, and `s` are not
