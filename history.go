@@ -21,6 +21,7 @@ type history struct {
 	control     historyControl
 	file        string
 	appendOnAdd func() bool
+	resync      func()
 	mu          sync.Mutex
 	entries     []string
 	dirtyFile   bool
@@ -188,6 +189,40 @@ func (h *history) Entries() []string {
 	return out
 }
 
+// Clear forgets all in-memory entries without touching the history file.
+func (h *history) Clear() {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	h.entries = h.entries[:0]
+	h.dirtyFile = false
+	h.mu.Unlock()
+	if h.resync != nil {
+		h.resync()
+	}
+}
+
+// Delete removes the entry at pos (1-based; negative counts from the end)
+// and reports whether pos was in range. The removal is persisted on the next
+// rewrite of the history file.
+func (h *history) Delete(pos int) bool {
+	if h == nil {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if pos < 0 {
+		pos = len(h.entries) + pos + 1
+	}
+	if pos < 1 || pos > len(h.entries) {
+		return false
+	}
+	h.entries = append(h.entries[:pos-1], h.entries[pos:]...)
+	h.dirtyFile = true
+	return true
+}
+
 func (h *history) appendFile(line string) {
 	if h == nil || h.file == "" {
 		return
@@ -220,8 +255,23 @@ func (h *history) RewriteFile() error {
 	if h == nil || h.file == "" {
 		return nil
 	}
+	return h.WriteFile(h.file)
+}
+
+// WriteFile writes all entries to name (or the configured history file when
+// name is empty), truncating it first.
+func (h *history) WriteFile(name string) error {
+	if h == nil {
+		return nil
+	}
+	if name == "" {
+		name = h.file
+	}
+	if name == "" {
+		return fmt.Errorf("history: no history file")
+	}
 	entries := h.Entries()
-	file, err := os.OpenFile(h.file, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o666)
+	file, err := os.OpenFile(name, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o666)
 	if err != nil {
 		return err
 	}
@@ -234,9 +284,33 @@ func (h *history) RewriteFile() error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	h.mu.Lock()
-	h.dirtyFile = false
-	h.mu.Unlock()
+	if name == h.file {
+		h.mu.Lock()
+		h.dirtyFile = false
+		h.mu.Unlock()
+	}
+	return nil
+}
+
+// ReadFile appends the entries from name (or the configured history file
+// when name is empty) to the in-memory list and re-synchronizes the readline
+// history.
+func (h *history) ReadFile(name string) error {
+	if h == nil {
+		return nil
+	}
+	if name == "" {
+		name = h.file
+	}
+	if name == "" {
+		return fmt.Errorf("history: no history file")
+	}
+	if err := h.LoadFile(name); err != nil {
+		return err
+	}
+	if h.resync != nil {
+		h.resync()
+	}
 	return nil
 }
 

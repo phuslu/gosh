@@ -287,6 +287,68 @@ func TestHistoryHistappendRewrite(t *testing.T) {
 	}
 }
 
+func TestHistoryBuiltinFlags(t *testing.T) {
+	h := &history{limit: 10}
+	h.append("one")
+	h.append("two")
+	h.append("three")
+
+	var out bytes.Buffer
+	if err := builtinHistory(h, []string{"-d", "2"}, &out); err != nil {
+		t.Fatalf("history -d failed: %v", err)
+	}
+	if got, want := h.Entries(), []string{"one", "three"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("entries after delete = %#v, want %#v", got, want)
+	}
+
+	file := filepath.Join(t.TempDir(), "history")
+	if err := builtinHistory(h, []string{"-w", file}, &out); err != nil {
+		t.Fatalf("history -w failed: %v", err)
+	}
+	if err := builtinHistory(h, []string{"-c"}, &out); err != nil {
+		t.Fatalf("history -c failed: %v", err)
+	}
+	if got := h.Entries(); len(got) != 0 {
+		t.Fatalf("entries after clear = %#v, want empty", got)
+	}
+	if err := builtinHistory(h, []string{"-r", file}, &out); err != nil {
+		t.Fatalf("history -r failed: %v", err)
+	}
+	if got, want := h.Entries(), []string{"one", "three"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("entries after read = %#v, want %#v", got, want)
+	}
+
+	if err := builtinHistory(h, []string{"-d", "99"}, &out); err == nil {
+		t.Fatalf("history -d out of range should fail")
+	}
+	if err := builtinHistory(h, []string{"-x"}, &out); err == nil {
+		t.Fatalf("history -x should fail")
+	}
+}
+
+func TestRunHistoryBuiltin(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args: []string{"gosh", "-c", `
+			history
+			history -d 1 || echo no-entry
+			history -c
+		`},
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Env:    testEnv(t),
+	})
+	if err != nil {
+		t.Fatalf("Run history builtin failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got, want := stdout.String(), "no-entry\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if got, want := stderr.String(), "history: position out of range\n"; got != want {
+		t.Fatalf("stderr = %q, want %q", got, want)
+	}
+}
+
 func TestBindParser(t *testing.T) {
 	key, action, err := parseBindArgs([]string{`"\e[A": history-search-backward`})
 	if err != nil {

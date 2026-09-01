@@ -212,10 +212,14 @@ func Run(c Config) error {
 	if err != nil {
 		return err
 	}
-	_ = history.LoadFile(histFile)
-	for _, entry := range history.Entries() {
-		_ = rl.SaveToHistory(entry)
+	history.resync = func() {
+		rl.ResetHistory()
+		for _, entry := range history.Entries() {
+			_ = rl.SaveToHistory(entry)
+		}
 	}
+	_ = history.LoadFile(histFile)
+	history.resync()
 	completer.attach(rl)
 	historySearch.Attach(rl)
 	updateCheckwinsizeColumns(runner, getScreenWidth)

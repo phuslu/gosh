@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"mvdan.cc/sh/v3/interp"
@@ -119,9 +121,9 @@ func callHandler(runner func() *interp.Runner, history *history, bindings *keyBi
 				return args, nil
 			}
 			hc := interp.HandlerCtx(ctx)
-			entries := history.Entries()
-			for idx, entry := range entries {
-				fmt.Fprintf(hc.Stdout, "%5d  %s\n", idx+1, entry)
+			if err := builtinHistory(history, args[1:], hc.Stdout); err != nil {
+				fmt.Fprintln(hc.Stderr, err)
+				return []string{"false"}, nil
 			}
 			return []string{":"}, nil
 		case "bind":
@@ -155,6 +157,73 @@ func callHandler(runner func() *interp.Runner, history *history, bindings *keyBi
 		}
 		return args, nil
 	}
+}
+
+// builtinHistory implements the history builtin's -c/-d/-w/-r flags and the
+// plain listing. It is a separate function so it can be tested without an
+// interpreter runner.
+func builtinHistory(h *history, args []string, stdout io.Writer) error {
+	var (
+		clear, delete, write, read bool
+		deletePos                  int
+		file                       string
+	)
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-c":
+			clear = true
+		case "-d":
+			delete = true
+			if i+1 >= len(args) {
+				return fmt.Errorf("history: -d requires an offset")
+			}
+			i++
+			pos, err := strconv.Atoi(args[i])
+			if err != nil {
+				return fmt.Errorf("history: invalid offset %q", args[i])
+			}
+			deletePos = pos
+		case "-w":
+			write = true
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				file = args[i]
+			}
+		case "-r":
+			read = true
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				file = args[i]
+			}
+		default:
+			return fmt.Errorf("history: unsupported argument %q", args[i])
+		}
+	}
+
+	if clear {
+		h.Clear()
+	}
+	if delete {
+		if !h.Delete(deletePos) {
+			return fmt.Errorf("history: position out of range")
+		}
+	}
+	if read {
+		if err := h.ReadFile(file); err != nil {
+			return err
+		}
+	}
+	if write {
+		if err := h.WriteFile(file); err != nil {
+			return err
+		}
+	}
+	if !clear && !delete && !read && !write {
+		for idx, entry := range h.Entries() {
+			fmt.Fprintf(stdout, "%5d  %s\n", idx+1, entry)
+		}
+	}
+	return nil
 }
 
 func dropBuiltinPrintfDashDash(args []string) ([]string, bool) {
