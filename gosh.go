@@ -81,6 +81,7 @@ type Shell struct {
 	dir         string
 	command     *commandSpec
 	interactive bool
+	noop        bool
 
 	baseCtx context.Context
 
@@ -132,11 +133,22 @@ func New(c Config) (*Shell, error) {
 		return nil, err
 	}
 	s.command = command
-	s.interactive = c.IsTerminal && command == nil
+	hasCommand := command != nil && command.isCommand
+	s.interactive = (c.IsTerminal || command.interactive) && !hasCommand
+	if command.showVersion {
+		fmt.Fprintf(s.stdout, "gosh %s\n", s.version)
+		s.noop = true
+		return s, nil
+	}
+	if command.showHelp {
+		fmt.Fprint(s.stdout, goshUsage)
+		s.noop = true
+		return s, nil
+	}
 	if s.interactive {
 		s.env = SetEnv(s.env, "GOSH_INTERACTIVE", "1")
 	}
-	if command == nil && !s.interactive {
+	if !hasCommand && !s.interactive {
 		s.runnerStdin = strings.NewReader("")
 	}
 
@@ -226,16 +238,22 @@ func (s *Shell) initialize() error {
 	}
 
 	// Source the interactive init file.
-	if s.interactive {
-		file, err := os.Open(resolveInitFile(s.env, true))
+	if s.interactive && !s.command.noRC {
+		file := s.command.rcFile
+		if file == "" {
+			file = resolveInitFile(s.env, true)
+		} else {
+			file = expandEnv(s.env, file)
+		}
+		fileHandle, err := os.Open(file)
 		if err == nil {
-			prog, err := s.parser.Parse(file, file.Name())
+			prog, err := s.parser.Parse(fileHandle, fileHandle.Name())
 			if err != nil {
-				fmt.Fprintln(s.stderr, "failed to parse", file.Name(), ":", err)
+				fmt.Fprintln(s.stderr, "failed to parse", fileHandle.Name(), ":", err)
 			} else if err := runner.Run(s.baseCtx, prog); err != nil {
-				fmt.Fprintln(s.stderr, "failed to run", file.Name(), ":", err)
+				fmt.Fprintln(s.stderr, "failed to run", fileHandle.Name(), ":", err)
 			}
-			file.Close()
+			fileHandle.Close()
 		}
 	}
 	return nil
@@ -262,19 +280,27 @@ func (s *Shell) cfgNotifySignals() bool {
 // Run executes the shell invocation described by Config. When ctx is nil,
 // Config.Context (or context.Background) is used.
 func (s *Shell) Run(ctx context.Context) error {
+	if s.noop {
+		return nil
+	}
 	ctx, cancel := s.runContext(ctx)
 	defer cancel()
 	if s.cfg.IsTerminal && s.cfg.OnPromptReset != nil {
 		s.cfg.OnPromptReset(ctx)
 	}
 	switch {
-	case s.command != nil:
+	case s.command.isCommand:
 		return s.runCommand(ctx)
 	case s.interactive:
 		return s.runInteractive(ctx)
 	default:
 		s.runner.Reset()
 		s.opts.reset(s.interactive)
+		if len(s.command.params) != 0 {
+			s.runner.Params = append([]string(nil), s.command.params...)
+		} else {
+			s.runner.Params = nil
+		}
 		return runNonInteractiveStream(ctx, s.stdin, s.runner, s.stdout, s.stderr)
 	}
 }

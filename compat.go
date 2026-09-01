@@ -66,6 +66,9 @@ func callHandler(deps callDeps) interp.CallHandlerFunc {
 }
 
 func (d callDeps) rewriteComplete(ctx context.Context, args []string) ([]string, bool) {
+	if d.functionDefined(args[0]) {
+		return args, false
+	}
 	if d.completion == nil {
 		return args, false
 	}
@@ -78,6 +81,9 @@ func (d callDeps) rewriteComplete(ctx context.Context, args []string) ([]string,
 }
 
 func (d callDeps) rewriteCompgen(ctx context.Context, args []string) ([]string, bool) {
+	if d.functionDefined(args[0]) {
+		return args, false
+	}
 	if d.completion == nil {
 		return args, false
 	}
@@ -90,6 +96,9 @@ func (d callDeps) rewriteCompgen(ctx context.Context, args []string) ([]string, 
 }
 
 func (d callDeps) rewriteCompopt(ctx context.Context, args []string) ([]string, bool) {
+	if d.functionDefined(args[0]) {
+		return args, false
+	}
 	if d.completion == nil {
 		return args, false
 	}
