@@ -3,6 +3,7 @@ package gosh
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -639,6 +640,9 @@ func (p *promptState) runScript(script string) (string, error) {
 }
 
 func runSubshell(ctx context.Context, runner *interp.Runner, stdin io.Reader, stderr io.Writer, script string) (string, error) {
+	if runner == nil {
+		return "", errors.New("gosh: prompt has no interpreter")
+	}
 	prog, err := syntax.NewParser().Parse(strings.NewReader(script), "")
 	if err != nil {
 		return "", err
