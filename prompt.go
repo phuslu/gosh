@@ -25,6 +25,20 @@ func defaultPrompt(version string) string {
 	return "sh-" + shortVersion(version) + symbol + " "
 }
 
+// subshellStdin chooses an stdin source for prompt and completion subshells.
+// os.File reads are safe to share with the shell and preserve terminal
+// behavior; arbitrary readers are not, and passing them to two interp.StdIO
+// copy goroutines at once would race, so they get an empty stdin instead.
+func subshellStdin(stdin io.Reader) io.Reader {
+	if stdin == nil {
+		return strings.NewReader("")
+	}
+	if _, ok := stdin.(*os.File); ok {
+		return stdin
+	}
+	return strings.NewReader("")
+}
+
 func shortVersion(version string) string {
 	if len(version) > 3 {
 		return version[:3]
@@ -47,7 +61,7 @@ func promptString(ctx context.Context, runner *interp.Runner, opts *shellOptions
 		ctx:          ctx,
 		runner:       runner,
 		opts:         opts,
-		stdin:        stdin,
+		stdin:        subshellStdin(stdin),
 		stderr:       stderr,
 		dir:          runner.Dir,
 		host:         host,

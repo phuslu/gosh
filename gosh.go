@@ -147,6 +147,12 @@ func New(c Config) (*Shell, error) {
 	}
 	if s.interactive {
 		s.env = SetEnv(s.env, "GOSH_INTERACTIVE", "1")
+		if _, ok := s.stdin.(*os.File); !ok {
+			// Only readline consumes an arbitrary interactive reader. Sharing
+			// it with interp.StdIO would start a second copy goroutine over
+			// a source which need not be concurrency-safe.
+			s.runnerStdin = strings.NewReader("")
+		}
 	}
 	if !hasCommand && !s.interactive {
 		s.runnerStdin = strings.NewReader("")
@@ -381,7 +387,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 		runner:        s.runner,
 		opts:          s.opts,
 		completion:    s.completion,
-		stdin:         s.stdin,
+		stdin:         subshellStdin(s.stdin),
 		stdout:        conWriter,
 		stderr:        conWriter,
 		promptPrinter: promptPrinter,
