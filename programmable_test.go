@@ -56,7 +56,7 @@ func TestProgrammableCompletionFunction(t *testing.T) {
 	`)
 	c.completion.set("cmd", &completionSpec{funcName: "_complete_cmd"})
 
-	ctx := scanCompletionContext([]rune("cmd "))
+	ctx := parseCompletionContext([]rune("cmd "))
 	result := c.programmableCompletion(ctx, []rune("cmd "), 4)
 	if !result.handled {
 		t.Fatal("programmable completion was not handled")
@@ -72,7 +72,7 @@ func TestProgrammableCompletionFunctionVariables(t *testing.T) {
 	`)
 	c.completion.set("cmd", &completionSpec{funcName: "_complete_cmd"})
 
-	ctx := scanCompletionContext([]rune("cmd arg"))
+	ctx := parseCompletionContext([]rune("cmd arg"))
 	result := c.programmableCompletion(ctx, []rune("cmd arg"), 7)
 	if !result.handled {
 		t.Fatal("programmable completion was not handled")
@@ -86,7 +86,7 @@ func TestProgrammableCompletionWordList(t *testing.T) {
 	c := newProgrammableCompleter(t, "")
 	c.completion.set("greet", &completionSpec{words: []string{"help", "other"}})
 
-	ctx := scanCompletionContext([]rune("greet he"))
+	ctx := parseCompletionContext([]rune("greet he"))
 	result := c.programmableCompletion(ctx, []rune("greet he"), 8)
 	if !result.handled {
 		t.Fatal("programmable completion was not handled")
@@ -102,7 +102,7 @@ func TestProgrammableCompletionCompopt(t *testing.T) {
 	`)
 	c.completion.set("cmd", &completionSpec{funcName: "_complete_cmd"})
 
-	ctx := scanCompletionContext([]rune("cmd "))
+	ctx := parseCompletionContext([]rune("cmd "))
 	result := c.programmableCompletion(ctx, []rune("cmd "), 4)
 	if !result.handled {
 		t.Fatal("programmable completion was not handled")

@@ -662,7 +662,7 @@ func waitForOutput(t *testing.T, s *syncBuffer, want string, timeout time.Durati
 }
 
 func TestCompletionHelpers(t *testing.T) {
-	ctx := scanCompletionContext([]rune("cd ~/Do"))
+	ctx := parseCompletionContext([]rune("cd ~/Do"))
 	if ctx.isCommand || ctx.command != "cd" || ctx.prefix != "~/Do" {
 		t.Fatalf("completion context = %#v", ctx)
 	}

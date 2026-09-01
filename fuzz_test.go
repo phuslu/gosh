@@ -22,7 +22,7 @@ func FuzzParseKeySequence(f *testing.F) {
 	})
 }
 
-func FuzzScanCompletionContext(f *testing.F) {
+func FuzzCompletionContext(f *testing.F) {
 	for _, seed := range []string{
 		"echo hello ",
 		`git commit -m "`,
@@ -33,7 +33,7 @@ func FuzzScanCompletionContext(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, input string) {
-		_ = scanCompletionContext([]rune(input))
+		_ = parseCompletionContext([]rune(input))
 	})
 }
 

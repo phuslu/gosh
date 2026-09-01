@@ -204,9 +204,13 @@ func (c *autoCompleter) completionContext(line []rune, pos int) completionContex
 	if pos > len(line) {
 		pos = len(line)
 	}
-	return scanCompletionContext(line[:pos])
+	return parseCompletionContext(line[:pos])
 }
 
+// scanCompletionContext is the legacy hand-written completion scanner. It is
+// no longer used by completion itself: parseCompletionContext derives the
+// same context from the mvdan parser/AST. It is kept solely as the reference
+// implementation for the differential tests in completion_parse_test.go.
 func scanCompletionContext(line []rune) completionContext {
 	var words []string
 	var current []rune
@@ -293,54 +297,6 @@ func scanCompletionContext(line []rune) completionContext {
 	}
 	cword := len(words)
 	return completionContext{prefix: prefix, isCommand: isCommand, command: command, quote: quote, words: words, cword: cword, inWord: inWord}
-}
-
-func (c *autoCompleter) isCommandPosition(line []rune, start int) bool {
-	idx := start - 1
-	for idx >= 0 {
-		r := line[idx]
-		if unicode.IsSpace(r) {
-			idx--
-			continue
-		}
-		if isCommandSeparator(r) {
-			return true
-		}
-		end := idx + 1
-		for idx >= 0 && !isCompletionBreak(line[idx]) {
-			idx--
-		}
-		word := string(line[idx+1 : end])
-		return keywordStartsCommand(word)
-	}
-	return true
-}
-
-func (c *autoCompleter) resolveCommand(line []rune, wordStart int) string {
-	idx := wordStart - 1
-	for idx >= 0 {
-		r := line[idx]
-		if r == '\n' {
-			break
-		}
-		if isCommandSeparator(r) {
-			break
-		}
-		idx--
-	}
-	if idx < 0 {
-		idx = 0
-	} else {
-		idx++
-	}
-	for idx < len(line) && unicode.IsSpace(line[idx]) {
-		idx++
-	}
-	start := idx
-	for idx < len(line) && !isCompletionBreak(line[idx]) {
-		idx++
-	}
-	return string(line[start:idx])
 }
 
 func (c *autoCompleter) commandCandidates(prefix string) []string {
