@@ -130,8 +130,8 @@ func callHandler(runner func() *interp.Runner, history *history, bindings *keyBi
 			if bindings == nil {
 				return args, nil
 			}
-			if err := bindings.handleBind(args[1:]); err != nil {
-				hc := interp.HandlerCtx(ctx)
+			hc := interp.HandlerCtx(ctx)
+			if err := bindings.handleBind(args[1:], hc.Stdout); err != nil {
 				fmt.Fprintln(hc.Stderr, err)
 				return []string{"false"}, nil
 			}

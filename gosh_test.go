@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -393,6 +394,33 @@ func TestBindParser(t *testing.T) {
 	}
 	if got, ok := lookupBindAction(action); !ok || got != keyActionHistorySearchBackward {
 		t.Fatalf("bind action = %v, %v", got, ok)
+	}
+}
+
+func TestBindListing(t *testing.T) {
+	m := &keyBindingManager{entries: make(map[string]*goKeyBindingEntry)}
+	if err := m.handleBind([]string{`"\e[A": history-search-backward`}, io.Discard); err != nil {
+		t.Fatalf("handleBind failed: %v", err)
+	}
+	if err := m.handleBind([]string{`"\C-a": beginning-of-line`}, io.Discard); err != nil {
+		t.Fatalf("handleBind failed: %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := m.handleBind([]string{"-P"}, &out); err != nil {
+		t.Fatalf("handleBind -P failed: %v", err)
+	}
+	want := `"\C-a": beginning-of-line` + "\n" + `"\e[A": history-search-backward` + "\n"
+	if got := out.String(); got != want {
+		t.Fatalf("listing = %q, want %q", got, want)
+	}
+
+	out.Reset()
+	if err := m.handleBind(nil, &out); err != nil {
+		t.Fatalf("handleBind with no args failed: %v", err)
+	}
+	if got := out.String(); got != want {
+		t.Fatalf("no-arg listing = %q, want %q", got, want)
 	}
 }
 

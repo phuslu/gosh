@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,7 +31,28 @@ const (
 	keyActionHistorySearchForward  = 0x91
 )
 
-func (m *keyBindingManager) handleBind(args []string) error {
+func (m *keyBindingManager) handleBind(args []string, out io.Writer) error {
+	if len(args) == 0 || (len(args) == 1 && args[0] == "-P") {
+		if out == nil {
+			out = io.Discard
+		}
+		m.mu.RLock()
+		entries := make([]*goKeyBindingEntry, 0, len(m.entries))
+		for _, entry := range m.entries {
+			entries = append(entries, entry)
+		}
+		slices.SortFunc(entries, func(a, b *goKeyBindingEntry) int {
+			return strings.Compare(keySequenceSpec(a.seq), keySequenceSpec(b.seq))
+		})
+		for _, entry := range entries {
+			if name, ok := bindActionNames[entry.action]; ok {
+				fmt.Fprintf(out, "\"%s\": %s\n", keySequenceSpec(entry.seq), name)
+			}
+		}
+		m.mu.RUnlock()
+		return nil
+	}
+
 	keySpec, actionSpec, err := parseBindArgs(args)
 	if err != nil {
 		return err
@@ -48,6 +70,42 @@ func (m *keyBindingManager) handleBind(args []string) error {
 	}
 	m.store(seq, actionRune)
 	return nil
+}
+
+// bindActionNames maps readline action runes back to the bind syntax names,
+// used by `bind` with no arguments and `bind -P`.
+var bindActionNames = map[rune]string{
+	readline.CharLineStart:         "beginning-of-line",
+	readline.CharLineEnd:           "end-of-line",
+	readline.CharPrev:              "previous-screen",
+	readline.CharNext:              "next-screen",
+	keyActionHistorySearchBackward: "history-search-backward",
+	keyActionHistorySearchForward:  "history-search-forward",
+}
+
+// keySequenceSpec renders a bound key sequence back in bind syntax, e.g.
+// "\e[A" or "\C-a".
+func keySequenceSpec(seq []byte) string {
+	var b strings.Builder
+	for _, c := range seq {
+		switch {
+		case c == 0x1b:
+			b.WriteString(`\e`)
+		case c == 0x7f:
+			b.WriteString(`\C-?`)
+		case c < 0x20:
+			if c == 0 {
+				b.WriteString(`\C-@`)
+			} else {
+				fmt.Fprintf(&b, `\C-%c`, c+0x60)
+			}
+		case c < 0x7f:
+			b.WriteByte(c)
+		default:
+			fmt.Fprintf(&b, `\x%02x`, c)
+		}
+	}
+	return b.String()
 }
 
 func (m *keyBindingManager) store(seq []byte, action rune) {
