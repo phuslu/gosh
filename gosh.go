@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/signal"
 	"strconv"
@@ -39,6 +40,19 @@ type Config struct {
 	NotifySignals bool
 	IsTerminal    bool
 	OnPromptReset func(context.Context)
+	Backend       Backend
+}
+
+// Backend replaces the interpreter's process-execution and filesystem
+// capabilities. A nil Config.Backend keeps gosh's host-process defaults.
+// Implementations can provide a sandbox, mock filesystem, remote executor,
+// or audit layer without changing shell semantics.
+type Backend interface {
+	Exec(ctx context.Context, args []string) error
+	Open(ctx context.Context, path string, flag int, perm os.FileMode) (io.ReadWriteCloser, error)
+	Stat(ctx context.Context, name string, followSymlinks bool) (fs.FileInfo, error)
+	ReadDir(ctx context.Context, path string) ([]fs.DirEntry, error)
+	Access(ctx context.Context, path string, mode interp.AccessMode) error
 }
 
 // Run executes one shell invocation. It is a convenience wrapper around New
@@ -160,6 +174,14 @@ func (s *Shell) initialize() error {
 	if s.dir != "" {
 		opts = append(opts, interp.Dir(s.dir))
 	}
+	if backend := s.cfg.Backend; backend != nil {
+		opts = append(opts,
+			interp.OpenHandler(backend.Open),
+			interp.ReadDirHandler2(backend.ReadDir),
+			interp.StatHandler(backend.Stat),
+			interp.AccessHandler(backend.Access),
+		)
+	}
 
 	s.parser = syntax.NewParser()
 	s.history = &history{limit: resolveHistoryLimit()}
@@ -175,7 +197,7 @@ func (s *Shell) initialize() error {
 		opts:       s.opts,
 	}
 	opts = append(opts, interp.CallHandler(callHandler(deps)))
-	opts = append(opts, interp.ExecHandlers(execHandler(deps.runner, s.opts)))
+	opts = append(opts, interp.ExecHandlers(execHandler(deps.runner, s.opts, backendExec(s.cfg.Backend))))
 
 	runner, err := interp.New(opts...)
 	if err != nil {

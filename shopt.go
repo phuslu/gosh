@@ -133,7 +133,14 @@ func (p *shoptFlagParser) args() []string {
 	return p.remaining
 }
 
-func execHandler(runner func() *interp.Runner, opts *shellOptions) func(interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+func backendExec(backend Backend) interp.ExecHandlerFunc {
+	if backend == nil {
+		return nil
+	}
+	return backend.Exec
+}
+
+func execHandler(runner func() *interp.Runner, opts *shellOptions, execBackend interp.ExecHandlerFunc) func(interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 	return func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 		return func(ctx context.Context, args []string) error {
 			if len(args) > 0 && args[0] == "set" {
@@ -149,6 +156,9 @@ func execHandler(runner func() *interp.Runner, opts *shellOptions) func(interp.E
 					r = runner()
 				}
 				return runShopt(ctx, r, opts, args[1:])
+			}
+			if execBackend != nil {
+				return execBackend(ctx, args)
 			}
 			return next(ctx, args)
 		}
