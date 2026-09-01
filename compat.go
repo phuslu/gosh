@@ -13,10 +13,11 @@ import (
 // need. Keeping it behind one value makes the middleware chain independent
 // of gosh.Run's wiring and easy to extend for future backends.
 type callDeps struct {
-	runner   func() *interp.Runner
-	history  *history
-	bindings *keyBindingManager
-	opts     *shellOptions
+	runner     func() *interp.Runner
+	history    *history
+	bindings   *keyBindingManager
+	completion *completionRegistry
+	opts       *shellOptions
 }
 
 // callInterceptor is one compatibility middleware. A handler returns
@@ -40,6 +41,9 @@ func callHandler(deps callDeps) interp.CallHandlerFunc {
 		{name: "history", rewrite: deps.rewriteHistory},
 		{name: "fc", rewrite: deps.rewriteFc},
 		{name: "bind", rewrite: deps.rewriteBind},
+		{name: "complete", rewrite: deps.rewriteComplete},
+		{name: "compgen", rewrite: deps.rewriteCompgen},
+		{name: "compopt", rewrite: deps.rewriteCompopt},
 		{name: "kill", rewrite: deps.rewriteKillNewgrp},
 		{name: "newgrp", rewrite: deps.rewriteKillNewgrp},
 	}
@@ -59,6 +63,42 @@ func callHandler(deps callDeps) interp.CallHandlerFunc {
 		}
 		return args, nil
 	}
+}
+
+func (d callDeps) rewriteComplete(ctx context.Context, args []string) ([]string, bool) {
+	if d.completion == nil {
+		return args, false
+	}
+	hc := interp.HandlerCtx(ctx)
+	if err := builtinComplete(d, args[1:], hc.Stdout); err != nil {
+		fmt.Fprintln(hc.Stderr, err)
+		return []string{"false"}, true
+	}
+	return []string{":"}, true
+}
+
+func (d callDeps) rewriteCompgen(ctx context.Context, args []string) ([]string, bool) {
+	if d.completion == nil {
+		return args, false
+	}
+	hc := interp.HandlerCtx(ctx)
+	if err := builtinCompgen(d, ctx, args[1:], hc.Stdout); err != nil {
+		fmt.Fprintln(hc.Stderr, err)
+		return []string{"false"}, true
+	}
+	return []string{":"}, true
+}
+
+func (d callDeps) rewriteCompopt(ctx context.Context, args []string) ([]string, bool) {
+	if d.completion == nil {
+		return args, false
+	}
+	hc := interp.HandlerCtx(ctx)
+	if err := builtinCompopt(d, args[1:], hc.Stdout); err != nil {
+		fmt.Fprintln(hc.Stderr, err)
+		return []string{"false"}, true
+	}
+	return []string{":"}, true
 }
 
 func (d callDeps) functionDefined(name string) bool {

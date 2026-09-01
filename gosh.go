@@ -70,12 +70,13 @@ type Shell struct {
 
 	baseCtx context.Context
 
-	parser   *syntax.Parser
-	runner   *interp.Runner
-	history  *history
-	bindings *keyBindingManager
-	opts     *shellOptions
-	rl       *readline.Instance
+	parser     *syntax.Parser
+	runner     *interp.Runner
+	history    *history
+	bindings   *keyBindingManager
+	completion *completionRegistry
+	opts       *shellOptions
+	rl         *readline.Instance
 
 	hostname     string
 	homeFallback string
@@ -163,13 +164,15 @@ func (s *Shell) initialize() error {
 	s.parser = syntax.NewParser()
 	s.history = &history{limit: resolveHistoryLimit()}
 	s.bindings = &keyBindingManager{entries: make(map[string]*goKeyBindingEntry)}
+	s.completion = newCompletionRegistry()
 	s.opts = newShellOptions(s.interactive)
 
 	deps := callDeps{
-		runner:   func() *interp.Runner { return s.runner },
-		history:  s.history,
-		bindings: s.bindings,
-		opts:     s.opts,
+		runner:     func() *interp.Runner { return s.runner },
+		history:    s.history,
+		bindings:   s.bindings,
+		completion: s.completion,
+		opts:       s.opts,
 	}
 	opts = append(opts, interp.CallHandler(callHandler(deps)))
 	opts = append(opts, interp.ExecHandlers(execHandler(deps.runner, s.opts)))
@@ -318,6 +321,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 		ctx:           ctx,
 		runner:        s.runner,
 		opts:          s.opts,
+		completion:    s.completion,
 		stdin:         s.stdin,
 		stdout:        conWriter,
 		stderr:        conWriter,

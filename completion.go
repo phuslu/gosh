@@ -22,6 +22,7 @@ type autoCompleter struct {
 	ctx           context.Context
 	runner        *interp.Runner
 	opts          *shellOptions
+	completion    *completionRegistry
 	stdin         io.Reader
 	stdout        io.Writer
 	stderr        io.Writer
@@ -39,6 +40,91 @@ type autoCompleter struct {
 	cachedCommands  []string
 }
 
+var defaultCommandNames = []string{
+	"alias",
+	"bg",
+	"bind",
+	"break",
+	"builtin",
+	"caller",
+	"cd",
+	"command",
+	"compgen",
+	"complete",
+	"compopt",
+	"continue",
+	"declare",
+	"dirs",
+	"disown",
+	"echo",
+	"enable",
+	"eval",
+	"exec",
+	"exit",
+	"export",
+	"false",
+	"fc",
+	"fg",
+	"getopts",
+	"hash",
+	"help",
+	"history",
+	"jobs",
+	"kill",
+	"let",
+	"local",
+	"logout",
+	"mapfile",
+	"newgrp",
+	"popd",
+	"printf",
+	"pushd",
+	"pwd",
+	"read",
+	"readarray",
+	"readonly",
+	"return",
+	"set",
+	"shift",
+	"shopt",
+	"source",
+	"suspend",
+	"test",
+	"times",
+	"trap",
+	"true",
+	"type",
+	"typeset",
+	"ulimit",
+	"umask",
+	"unalias",
+	"unset",
+	"wait",
+	":",
+	".",
+	"[",
+}
+
+var defaultKeywordNames = []string{
+	"case",
+	"coproc",
+	"do",
+	"done",
+	"elif",
+	"else",
+	"esac",
+	"fi",
+	"for",
+	"function",
+	"if",
+	"in",
+	"select",
+	"then",
+	"time",
+	"until",
+	"while",
+}
+
 func (c *autoCompleter) attach(rl *readline.Instance) {
 	c.rlMu.Lock()
 	c.rl = rl
@@ -47,6 +133,9 @@ func (c *autoCompleter) attach(rl *readline.Instance) {
 
 func (c *autoCompleter) Do(line []rune, pos int) ([][]rune, int) {
 	ctx := c.completionContext(line, pos)
+	if programmable := c.programmableCompletion(ctx, line, pos); programmable.handled {
+		return c.applyCompletionOptions(programmable.candidates, ctx, programmable.noSpace)
+	}
 	var options []string
 	if !ctx.isCommand && shoptEnabled(c.opts, "hostcomplete") {
 		options = c.hostCandidates(ctx.prefix)
@@ -60,6 +149,15 @@ func (c *autoCompleter) Do(line []rune, pos int) ([][]rune, int) {
 	if len(options) == 0 {
 		return nil, 0
 	}
+	return c.applyCompletionOptions(options, ctx, false)
+}
+
+// applyCompletionOptions turns a candidate list into the readline addition
+// and printed matches, honoring programmable completion's nospace option.
+func (c *autoCompleter) applyCompletionOptions(options []string, ctx completionContext, noSpace bool) ([][]rune, int) {
+	if len(options) == 0 {
+		return nil, 0
+	}
 	prefixLen := utf8.RuneCountInString(ctx.prefix)
 	common := longestCommonPrefix(options)
 	commonRunes := []rune(common)
@@ -69,7 +167,9 @@ func (c *autoCompleter) Do(line []rune, pos int) ([][]rune, int) {
 	}
 	if len(options) == 1 {
 		hasTrailingSep := hasTrailingPathSeparator(options[0])
-		if c.completionOptionIsDir(ctx, options[0]) {
+		if noSpace && !hasTrailingSep {
+			// The completion function asked for no trailing separator.
+		} else if c.completionOptionIsDir(ctx, options[0]) {
 			if !hasTrailingSep {
 				addition = append(addition, rune(os.PathSeparator))
 			}
@@ -92,6 +192,9 @@ type completionContext struct {
 	isCommand bool
 	command   string
 	quote     rune
+	words     []string
+	cword     int
+	inWord    bool
 }
 
 func (c *autoCompleter) completionContext(line []rune, pos int) completionContext {
@@ -188,7 +291,8 @@ func scanCompletionContext(line []rune) completionContext {
 	if len(words) > 0 {
 		command = words[0]
 	}
-	return completionContext{prefix: prefix, isCommand: isCommand, command: command, quote: quote}
+	cword := len(words)
+	return completionContext{prefix: prefix, isCommand: isCommand, command: command, quote: quote, words: words, cword: cword, inWord: inWord}
 }
 
 func (c *autoCompleter) isCommandPosition(line []rune, start int) bool {
@@ -344,94 +448,13 @@ func (c *autoCompleter) buildCommandIndexLocked(path, pathExt, home string) []st
 		}
 		seen[name] = struct{}{}
 	}
-	for _, name := range []string{
-		"alias",
-		"bg",
-		"bind",
-		"break",
-		"builtin",
-		"caller",
-		"cd",
-		"command",
-		"compgen",
-		"complete",
-		"compopt",
-		"continue",
-		"declare",
-		"dirs",
-		"disown",
-		"echo",
-		"enable",
-		"eval",
-		"exec",
-		"exit",
-		"export",
-		"false",
-		"fc",
-		"fg",
-		"getopts",
-		"hash",
-		"help",
-		"history",
-		"jobs",
-		"kill",
-		"let",
-		"local",
-		"logout",
-		"mapfile",
-		"newgrp",
-		"popd",
-		"printf",
-		"pushd",
-		"pwd",
-		"read",
-		"readarray",
-		"readonly",
-		"return",
-		"set",
-		"shift",
-		"shopt",
-		"source",
-		"suspend",
-		"test",
-		"times",
-		"trap",
-		"true",
-		"type",
-		"typeset",
-		"ulimit",
-		"umask",
-		"unalias",
-		"unset",
-		"wait",
-		":",
-		".",
-		"[",
-	} {
+	for _, name := range defaultCommandNames {
 		add(name)
 	}
 	for name := range c.runner.Funcs {
 		add(name)
 	}
-	for _, keyword := range []string{
-		"case",
-		"coproc",
-		"do",
-		"done",
-		"elif",
-		"else",
-		"esac",
-		"fi",
-		"for",
-		"function",
-		"if",
-		"in",
-		"select",
-		"then",
-		"time",
-		"until",
-		"while",
-	} {
+	for _, keyword := range defaultKeywordNames {
 		add(keyword)
 	}
 	if path != "" {
