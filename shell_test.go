@@ -168,3 +168,31 @@ func TestOpenScriptSourceLargeFile(t *testing.T) {
 		t.Fatalf("StdinFile data mismatch")
 	}
 }
+
+func TestPromptTemplateCache(t *testing.T) {
+	cache := newPromptCache()
+	first := cache.get(`\u@\h:\w`)
+	second := cache.get(`\u@\h:\w`)
+	if first != second {
+		t.Fatal("prompt cache did not reuse an identical template")
+	}
+	state := &promptState{
+		vars:      map[string]string{"USER": "alice", "HOME": "/home/alice"},
+		dir:       "/home/alice",
+		host:      "host.example",
+		shortHost: "host",
+	}
+	if got := first.render(state); got != "alice@host:~" {
+		t.Fatalf("cached prompt rendered %q", got)
+	}
+}
+
+func TestHistoryAppendErrorIsReported(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing-dir", "history")
+	var reported error
+	h := &history{file: missing, onError: func(err error) { reported = err }}
+	h.Add("echo lost")
+	if reported == nil {
+		t.Fatal("history onError hook was not invoked")
+	}
+}

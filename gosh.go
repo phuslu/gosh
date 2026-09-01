@@ -84,13 +84,14 @@ type Shell struct {
 
 	baseCtx context.Context
 
-	parser     *syntax.Parser
-	runner     *interp.Runner
-	history    *history
-	bindings   *keyBindingManager
-	completion *completionRegistry
-	opts       *shellOptions
-	rl         *readline.Instance
+	parser      *syntax.Parser
+	runner      *interp.Runner
+	history     *history
+	bindings    *keyBindingManager
+	completion  *completionRegistry
+	opts        *shellOptions
+	promptCache *promptCache
+	rl          *readline.Instance
 
 	hostname     string
 	homeFallback string
@@ -188,6 +189,7 @@ func (s *Shell) initialize() error {
 	s.bindings = &keyBindingManager{entries: make(map[string]*goKeyBindingEntry)}
 	s.completion = newCompletionRegistry()
 	s.opts = newShellOptions(s.interactive)
+	s.promptCache = newPromptCache()
 
 	deps := callDeps{
 		runner:     func() *interp.Runner { return s.runner },
@@ -323,12 +325,15 @@ func (s *Shell) runCommand(ctx context.Context) error {
 func (s *Shell) runInteractive(ctx context.Context) error {
 	promptFallback := defaultPrompt(s.version)
 	promptSeq := 1
-	currentPrompt := promptString(ctx, s.runner, s.opts, s.history, s.stdin, s.stderr, s.hostname, s.homeFallback, s.userFallback, "PS1", promptFallback, promptSeq)
+	currentPrompt := promptString(ctx, s.runner, s.opts, s.history, s.stdin, s.stderr, s.hostname, s.homeFallback, s.userFallback, "PS1", promptFallback, promptSeq, s.promptCache)
 	promptSeq++
 
 	// export HISTFILE=""
 	s.history.limit = resolveShellHistoryLimit(s.runner)
 	s.history.control = resolveShellHistoryControl(s.runner)
+	s.history.onError = func(err error) {
+		fmt.Fprintln(s.stderr, "history:", err)
+	}
 	histFile := resolveShellHistoryFile(s.runner)
 	s.history.file = histFile
 	s.history.appendOnAdd = func() bool {
@@ -417,7 +422,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 			}
 			return 0
 		})
-		setPrompt(promptString(ctx, s.runner, s.opts, s.history, s.stdin, s.stderr, s.hostname, s.homeFallback, s.userFallback, "PS1", defaultPrompt(s.version), promptSeq))
+		setPrompt(promptString(ctx, s.runner, s.opts, s.history, s.stdin, s.stderr, s.hostname, s.homeFallback, s.userFallback, "PS1", defaultPrompt(s.version), promptSeq, s.promptCache))
 		promptSeq++
 		flushPrefix()
 	}
@@ -448,7 +453,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 		// unclosed if/for blocks). Switch to the continuation prompt and keep
 		// reading without executing anything yet.
 		if s.parser.Incomplete() {
-			setPrompt(promptString(ctx, s.runner, s.opts, s.history, s.stdin, s.stderr, s.hostname, s.homeFallback, s.userFallback, "PS2", "> ", promptSeq))
+			setPrompt(promptString(ctx, s.runner, s.opts, s.history, s.stdin, s.stderr, s.hostname, s.homeFallback, s.userFallback, "PS2", "> ", promptSeq, s.promptCache))
 			flushPrefix()
 			return true
 		}

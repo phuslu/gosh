@@ -22,6 +22,7 @@ type history struct {
 	file        string
 	appendOnAdd func() bool
 	resync      func()
+	onError     func(error)
 	mu          sync.Mutex
 	entries     []string
 	dirtyFile   bool
@@ -152,7 +153,9 @@ func (h *history) Add(line string) bool {
 	}
 	h.mu.Unlock()
 	if appendNow {
-		h.appendFile(line)
+		if err := h.appendFile(line); err != nil && h.onError != nil {
+			h.onError(err)
+		}
 	}
 	return true
 }
@@ -226,16 +229,19 @@ func (h *history) Delete(pos int) bool {
 	return true
 }
 
-func (h *history) appendFile(line string) {
+func (h *history) appendFile(line string) error {
 	if h == nil || h.file == "" {
-		return
+		return nil
 	}
 	file, err := os.OpenFile(h.file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
 	if err != nil {
-		return
+		return err
 	}
-	_, _ = fmt.Fprintln(file, encodeHistoryLine(line))
-	_ = file.Close()
+	if _, err := fmt.Fprintln(file, encodeHistoryLine(line)); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 func (h *history) shouldAppendOnAdd() bool {

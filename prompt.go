@@ -34,7 +34,7 @@ func shortVersion(version string) string {
 	return version
 }
 
-func promptString(ctx context.Context, runner *interp.Runner, opts *shellOptions, history *history, stdin io.Reader, stderr io.Writer, host, homeFallback, userFallback, name, fallback string, seq int) promptParts {
+func promptString(ctx context.Context, runner *interp.Runner, opts *shellOptions, history *history, stdin io.Reader, stderr io.Writer, host, homeFallback, userFallback, name, fallback string, seq int, cache *promptCache) promptParts {
 	if host == "" {
 		host = "localhost"
 	}
@@ -61,7 +61,7 @@ func promptString(ctx context.Context, runner *interp.Runner, opts *shellOptions
 	if err != nil || val == "" {
 		return promptParts{prompt: fallback}
 	}
-	return splitPromptLines((&promptRenderer{src: val, state: state}).render())
+	return splitPromptLines((&promptRenderer{src: val, state: state, cache: cache}).render())
 }
 
 type promptParts struct {
@@ -184,28 +184,100 @@ func (p *promptState) historyNumber() string {
 }
 
 type promptRenderer struct {
-	src   string
-	state *promptState
+	src      string
+	state    *promptState
+	cache    *promptCache
+	template *promptTemplate
+	once     sync.Once
 }
 
 func (r *promptRenderer) render() string {
-	var b strings.Builder
-	for i := 0; i < len(r.src); {
-		switch r.src[i] {
+	return r.templateFor().render(r.state)
+}
+
+func (r *promptRenderer) templateFor() *promptTemplate {
+	r.once.Do(func() {
+		if r.cache != nil {
+			r.template = r.cache.get(r.src)
+			return
+		}
+		r.template = parsePromptTemplate(r.src)
+	})
+	return r.template
+}
+
+type promptCache struct {
+	mu      sync.Mutex
+	entries map[string]*promptTemplate
+}
+
+func newPromptCache() *promptCache {
+	return &promptCache{entries: make(map[string]*promptTemplate)}
+}
+
+func (c *promptCache) get(src string) *promptTemplate {
+	if c == nil {
+		return parsePromptTemplate(src)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if template := c.entries[src]; template != nil {
+		return template
+	}
+	template := parsePromptTemplate(src)
+	c.entries[src] = template
+	return template
+}
+
+type promptTokenKind uint8
+
+const (
+	promptTokenLiteral promptTokenKind = iota
+	promptTokenNonPrinting
+	promptTokenEscape
+	promptTokenParam
+	promptTokenCommand
+	promptTokenArithmetic
+)
+
+type promptToken struct {
+	kind     promptTokenKind
+	text     string
+	escape   byte
+	format   string
+	expr     string
+	raw      string
+	template *promptTemplate
+}
+
+type promptTemplate struct {
+	src    string
+	tokens []promptToken
+}
+
+func parsePromptTemplate(src string) *promptTemplate {
+	template := &promptTemplate{src: src}
+	template.parse()
+	return template
+}
+
+func (t *promptTemplate) parse() {
+	for i := 0; i < len(t.src); {
+		switch t.src[i] {
 		case '\\':
-			if i+1 >= len(r.src) {
-				b.WriteByte('\\')
+			if i+1 >= len(t.src) {
+				t.tokens = append(t.tokens, promptToken{kind: promptTokenLiteral, text: "\\"})
 				i++
 				continue
 			}
-			next := r.src[i+1]
+			next := t.src[i+1]
 			if next == '[' {
-				inner, pos := r.scanNonPrinting(i + 2)
+				inner, pos := scanPromptNonPrinting(t.src, i+2)
 				if pos == -1 {
 					i += 2
 					continue
 				}
-				b.WriteString((&promptRenderer{src: inner, state: r.state}).render())
+				t.tokens = append(t.tokens, promptToken{kind: promptTokenNonPrinting, template: parsePromptTemplate(inner)})
 				i = pos
 				continue
 			}
@@ -213,198 +285,231 @@ func (r *promptRenderer) render() string {
 				i += 2
 				continue
 			}
-			val, pos := r.handleEscape(i + 1)
-			b.WriteString(val)
-			i = pos
+			token := promptToken{kind: promptTokenEscape, escape: next}
+			if next == 'D' && i+2 < len(t.src) && t.src[i+2] == '{' {
+				if end := strings.IndexByte(t.src[i+3:], '}'); end >= 0 {
+					token.format = t.src[i+3 : i+3+end]
+					i = i + 3 + end + 1
+				} else {
+					i += 2
+				}
+			} else {
+				i += 2
+			}
+			t.tokens = append(t.tokens, token)
 		case '$':
-			if !r.state.promptvars() {
-				b.WriteByte('$')
+			start := i
+			if i+1 >= len(t.src) {
+				t.tokens = append(t.tokens, promptToken{kind: promptTokenLiteral, text: "$"})
 				i++
 				continue
 			}
-			val, next := r.expandDollar(i)
-			if next == i {
-				b.WriteByte('$')
-				i++
-				continue
+			switch t.src[i+1] {
+			case '(':
+				if i+2 < len(t.src) && t.src[i+2] == '(' {
+					expr, end, ok := scanPromptArithmetic(t.src, i+3)
+					if !ok {
+						t.tokens = append(t.tokens, promptToken{kind: promptTokenLiteral, text: "$"})
+						i++
+						continue
+					}
+					t.tokens = append(t.tokens, promptToken{kind: promptTokenArithmetic, expr: expr, raw: t.src[start:end]})
+					i = end
+					continue
+				}
+				body, end, ok := scanPromptDelimited(t.src, i+2, '(', ')')
+				if !ok {
+					t.tokens = append(t.tokens, promptToken{kind: promptTokenLiteral, text: "$"})
+					i++
+					continue
+				}
+				t.tokens = append(t.tokens, promptToken{kind: promptTokenCommand, expr: body, raw: t.src[start:end]})
+				i = end
+			case '{':
+				body, end, ok := scanPromptDelimited(t.src, i+2, '{', '}')
+				if !ok {
+					t.tokens = append(t.tokens, promptToken{kind: promptTokenLiteral, text: "$"})
+					i++
+					continue
+				}
+				t.tokens = append(t.tokens, promptToken{kind: promptTokenParam, expr: "${" + body + "}", raw: t.src[start:end]})
+				i = end
+			default:
+				name, end := scanPromptName(t.src, i+1)
+				if end == i+1 {
+					t.tokens = append(t.tokens, promptToken{kind: promptTokenLiteral, text: "$"})
+					i++
+					continue
+				}
+				t.tokens = append(t.tokens, promptToken{kind: promptTokenParam, expr: "${" + name + "-}", raw: t.src[start:end]})
+				i = end
 			}
-			b.WriteString(val)
-			i = next
 		default:
-			b.WriteByte(r.src[i])
+			t.tokens = append(t.tokens, promptToken{kind: promptTokenLiteral, text: t.src[i : i+1]})
 			i++
+		}
+	}
+}
+
+func (t *promptTemplate) render(state *promptState) string {
+	var b strings.Builder
+	for _, token := range t.tokens {
+		switch token.kind {
+		case promptTokenLiteral:
+			b.WriteString(token.text)
+		case promptTokenNonPrinting:
+			b.WriteString(token.template.render(state))
+		case promptTokenEscape:
+			b.WriteString(renderPromptEscape(state, token.escape, token.format))
+		case promptTokenParam:
+			if !state.promptvars() {
+				b.WriteString(token.raw)
+				continue
+			}
+			b.WriteString(state.runParam(token.expr))
+		case promptTokenCommand:
+			if !state.promptvars() {
+				b.WriteString(token.raw)
+				continue
+			}
+			b.WriteString(state.runCommand(token.expr))
+		case promptTokenArithmetic:
+			if !state.promptvars() {
+				b.WriteString(token.raw)
+				continue
+			}
+			b.WriteString(state.runArithmetic(token.expr))
 		}
 	}
 	return b.String()
 }
 
-func (r *promptRenderer) scanNonPrinting(start int) (string, int) {
-	for i := start; i < len(r.src)-1; i++ {
-		if r.src[i] == '\\' && r.src[i+1] == ']' {
-			return r.src[start:i], i + 2
+func scanPromptNonPrinting(src string, start int) (string, int) {
+	for i := start; i < len(src)-1; i++ {
+		if src[i] == '\\' && src[i+1] == ']' {
+			return src[start:i], i + 2
 		}
 	}
 	return "", -1
 }
 
-func (r *promptRenderer) handleEscape(idx int) (string, int) {
-	c := r.src[idx]
+func renderPromptEscape(state *promptState, c byte, format string) string {
 	switch c {
 	case 'a':
-		return "\a", idx + 1
+		return "\a"
 	case 'e', 'E':
-		return "\x1b", idx + 1
+		return "\x1b"
 	case 'n':
-		return "\n", idx + 1
+		return "\n"
 	case 'r':
-		return "\r", idx + 1
+		return "\r"
 	case 't':
-		return r.state.now.Format("15:04:05"), idx + 1
+		return state.now.Format("15:04:05")
 	case 'T':
-		return r.state.now.Format("03:04:05"), idx + 1
+		return state.now.Format("03:04:05")
 	case '@':
-		return r.state.now.Format("03:04:05PM"), idx + 1
+		return state.now.Format("03:04:05PM")
 	case 'A':
-		return r.state.now.Format("15:04"), idx + 1
+		return state.now.Format("15:04")
 	case 'd':
-		return r.state.now.Format("Mon Jan 02"), idx + 1
+		return state.now.Format("Mon Jan 02")
 	case 's':
-		return "gosh", idx + 1
+		return "gosh"
 	case 'u':
-		return r.state.user(), idx + 1
+		return state.user()
 	case 'h':
-		return r.state.shortHost, idx + 1
+		return state.shortHost
 	case 'H':
-		return r.state.host, idx + 1
+		return state.host
 	case 'w':
-		return r.state.displayPwd(), idx + 1
+		return state.displayPwd()
 	case 'W':
-		return filepath.Base(r.state.displayPwd()), idx + 1
+		return filepath.Base(state.displayPwd())
 	case 'D':
-		if idx+1 < len(r.src) && r.src[idx+1] == '{' {
-			end := strings.IndexByte(r.src[idx+2:], '}')
-			if end >= 0 {
-				start := idx + 2
-				format := r.src[start : start+end]
-				return r.state.formatTime(format), start + end + 1
-			}
+		if format != "" {
+			return state.formatTime(format)
 		}
 	case '#':
-		return fmt.Sprintf("%d", r.state.seq), idx + 1
+		return fmt.Sprintf("%d", state.seq)
 	case '!':
-		return r.state.historyNumber(), idx + 1
+		return state.historyNumber()
 	case '\\':
-		return "\\", idx + 1
+		return "\\"
 	case '$':
-		return r.state.promptSymbol(), idx + 1
+		return state.promptSymbol()
 	case '0':
-		return "\000", idx + 1
+		return "\000"
 	case 'j':
-		return "0", idx + 1
+		return "0"
 	case 'v', 'V':
-		return "gosh", idx + 1
+		return "gosh"
 	}
-	return string(c), idx + 1
+	return string(c)
 }
 
-func (r *promptRenderer) expandDollar(i int) (string, int) {
-	if i+1 >= len(r.src) {
-		return "", i
-	}
-	switch r.src[i+1] {
-	case '(':
-		if i+2 < len(r.src) && r.src[i+2] == '(' {
-			expr, end, ok := r.scanArithmetic(i + 3)
-			if !ok {
-				return "", i
-			}
-			return r.state.runArithmetic(expr), end
-		}
-		body, end, ok := r.scanDelimited(i+2, '(', ')')
-		if !ok {
-			return "", i
-		}
-		return r.state.runCommand(body), end
-	case '{':
-		body, end, ok := r.scanDelimited(i+2, '{', '}')
-		if !ok {
-			return "", i
-		}
-		expr := "${" + body + "}"
-		return r.state.runParam(expr), end
-	default:
-		name, end := r.scanName(i + 1)
-		if end == i+1 {
-			return "", i
-		}
-		expr := fmt.Sprintf("${%s-}", name)
-		return r.state.runParam(expr), end
-	}
-}
-
-func (r *promptRenderer) scanName(start int) (string, int) {
-	if start >= len(r.src) {
+func scanPromptName(src string, start int) (string, int) {
+	if start >= len(src) {
 		return "", start
 	}
-	ch := r.src[start]
+	ch := src[start]
 	if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_' {
 		j := start + 1
-		for j < len(r.src) {
-			c := r.src[j]
+		for j < len(src) {
+			c := src[j]
 			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' {
 				j++
 				continue
 			}
 			break
 		}
-		return r.src[start:j], j
+		return src[start:j], j
 	}
 	if strings.ContainsRune("@*#?$!-0123456789", rune(ch)) {
-		return r.src[start : start+1], start + 1
+		return src[start : start+1], start + 1
 	}
 	return "", start
 }
 
-func (r *promptRenderer) scanDelimited(start int, open, close byte) (string, int, bool) {
+func scanPromptDelimited(src string, start int, open, close byte) (string, int, bool) {
 	depth := 1
-	for i := start; i < len(r.src); i++ {
-		s := r.src[i]
+	for i := start; i < len(src); i++ {
+		s := src[i]
 		switch s {
 		case '\\':
 			i++
 			continue
 		case '\'':
 			j := i + 1
-			for j < len(r.src) && r.src[j] != '\'' {
+			for j < len(src) && src[j] != '\'' {
 				j++
 			}
-			if j >= len(r.src) {
-				return "", len(r.src), false
+			if j >= len(src) {
+				return "", len(src), false
 			}
 			i = j
 			continue
 		case '"':
 			j := i + 1
-			for j < len(r.src) {
-				if r.src[j] == '\\' && j+1 < len(r.src) {
+			for j < len(src) {
+				if src[j] == '\\' && j+1 < len(src) {
 					j += 2
 					continue
 				}
-				if r.src[j] == '"' {
+				if src[j] == '"' {
 					break
 				}
 				j++
 			}
-			if j >= len(r.src) {
-				return "", len(r.src), false
+			if j >= len(src) {
+				return "", len(src), false
 			}
 			i = j
 			continue
 		case '$':
-			if open == '(' && close == ')' && i+2 < len(r.src) && r.src[i+1] == '(' && r.src[i+2] == '(' {
-				next, ok := r.skipArithmetic(i + 3)
+			if open == '(' && close == ')' && i+2 < len(src) && src[i+1] == '(' && src[i+2] == '(' {
+				next, ok := skipPromptArithmetic(src, i+3)
 				if !ok {
-					return "", len(r.src), false
+					return "", len(src), false
 				}
 				i = next - 1
 				continue
@@ -417,25 +522,25 @@ func (r *promptRenderer) scanDelimited(start int, open, close byte) (string, int
 		if s == close {
 			depth--
 			if depth == 0 {
-				return r.src[start:i], i + 1, true
+				return src[start:i], i + 1, true
 			}
 		}
 	}
-	return "", len(r.src), false
+	return "", len(src), false
 }
 
-func (r *promptRenderer) scanArithmetic(start int) (string, int, bool) {
-	body, end, ok := r.scanDelimited(start, '(', ')')
-	if !ok || end >= len(r.src) {
-		return "", len(r.src), false
+func scanPromptArithmetic(src string, start int) (string, int, bool) {
+	body, end, ok := scanPromptDelimited(src, start, '(', ')')
+	if !ok || end >= len(src) {
+		return "", len(src), false
 	}
 	return body, end + 1, true
 }
 
-func (r *promptRenderer) skipArithmetic(start int) (int, bool) {
-	_, end, ok := r.scanDelimited(start, '(', ')')
-	if !ok || end >= len(r.src) || r.src[end] != ')' {
-		return len(r.src), false
+func skipPromptArithmetic(src string, start int) (int, bool) {
+	_, end, ok := scanPromptDelimited(src, start, '(', ')')
+	if !ok || end >= len(src) || src[end] != ')' {
+		return len(src), false
 	}
 	return end + 1, true
 }
