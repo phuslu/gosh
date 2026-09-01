@@ -33,10 +33,6 @@ type historyControl struct {
 }
 
 func resolveHistoryLimit() int {
-	val, _ := os.LookupEnv("HISTSIZE")
-	if n := parseHistoryLimit(val); n > 0 {
-		return n
-	}
 	return 1000
 }
 
@@ -61,7 +57,7 @@ func resolveShellHistoryControl(runner *interp.Runner) historyControl {
 	if val, ok := runnerStringVar(runner, "HISTCONTROL"); ok {
 		return parseHistoryControl(val)
 	}
-	return parseHistoryControl(os.Getenv("HISTCONTROL"))
+	return historyControl{}
 }
 
 func parseHistoryControl(val string) historyControl {
@@ -84,9 +80,6 @@ func parseHistoryControl(val string) historyControl {
 
 func resolveShellHistoryFile(runner *interp.Runner) string {
 	histFile, ok := runnerStringVar(runner, "HISTFILE")
-	if !ok {
-		histFile, ok = os.LookupEnv("HISTFILE")
-	}
 	if !ok || histFile == os.DevNull || histFile == "/dev/null" {
 		return ""
 	}

@@ -133,15 +133,22 @@ func (p *shoptFlagParser) args() []string {
 	return p.remaining
 }
 
-func execHandler(runner func() *interp.Runner) func(interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+func execHandler(runner func() *interp.Runner, opts *shellOptions) func(interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 	return func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 		return func(ctx context.Context, args []string) error {
+			if len(args) > 0 && args[0] == "set" {
+				err := next(ctx, args)
+				if err == nil && opts != nil {
+					opts.recordSet(args[1:])
+				}
+				return err
+			}
 			if len(args) > 0 && args[0] == shoptCommand {
 				var r *interp.Runner
 				if runner != nil {
 					r = runner()
 				}
-				return runShopt(ctx, r, args[1:])
+				return runShopt(ctx, r, opts, args[1:])
 			}
 			return next(ctx, args)
 		}
@@ -153,10 +160,15 @@ func shouldHandleShopt(args []string) bool {
 	if parsed.quiet {
 		return true
 	}
-	if parsed.unsupported != "" || parsed.invalid != "" || parsed.posix {
+	if parsed.unsupported != "" || parsed.invalid != "" {
 		return false
 	}
 	if len(parsed.args) == 0 {
+		return true
+	}
+	// Route option mutations (including upstream-supported ones) through
+	// gosh so its mirrored option state stays in sync with the interpreter.
+	if parsed.mode != "" {
 		return true
 	}
 	return shoptArgsHaveManagedOption(parsed.args)
@@ -212,7 +224,7 @@ func parseShoptArgs(args []string) shoptArgs {
 	return parsed
 }
 
-func runShopt(ctx context.Context, runner *interp.Runner, args []string) error {
+func runShopt(ctx context.Context, runner *interp.Runner, opts *shellOptions, args []string) error {
 	hc := interp.HandlerCtx(ctx)
 	parsed := parseShoptArgs(args)
 	if parsed.unsupported != "" {
@@ -225,20 +237,26 @@ func runShopt(ctx context.Context, runner *interp.Runner, args []string) error {
 	}
 	if parsed.mode != "" && (parsed.posix || !shoptArgsHaveManagedOption(parsed.args)) {
 		next := append([]string{"shopt"}, parsed.forward...)
-		return hc.Builtin(ctx, next)
+		err := hc.Builtin(ctx, next)
+		if err == nil && opts != nil {
+			for _, arg := range parsed.args {
+				opts.set(parsed.posix, arg, parsed.mode == "-s")
+			}
+		}
+		return err
 	}
 	if parsed.mode != "" {
-		return setShoptOptions(ctx, runner, parsed)
+		return setShoptOptions(ctx, runner, opts, parsed)
 	}
 	if len(parsed.args) == 0 {
 		if parsed.quiet {
 			return nil
 		}
-		printShoptOptions(hc.Stdout, runner, parsed.posix)
+		printShoptOptions(hc.Stdout, opts, parsed.posix)
 		return nil
 	}
 	for _, arg := range parsed.args {
-		enabled, ok := shoptOptionEnabled(runner, parsed.posix, arg)
+		enabled, ok := shoptOptionEnabled(opts, parsed.posix, arg)
 		if !ok {
 			fmt.Fprintf(hc.Stderr, "shopt: invalid option name %q\n", arg)
 			return interp.ExitStatus(1)
@@ -249,22 +267,21 @@ func runShopt(ctx context.Context, runner *interp.Runner, args []string) error {
 			}
 			continue
 		}
-		printShoptOption(hc.Stdout, runner, parsed.posix, arg)
+		printShoptOption(hc.Stdout, opts, parsed.posix, arg)
 	}
 	return nil
 }
 
-func setShoptOptions(ctx context.Context, runner *interp.Runner, parsed shoptArgs) error {
+func setShoptOptions(ctx context.Context, runner *interp.Runner, opts *shellOptions, parsed shoptArgs) error {
 	// runShopt only calls this for non-POSIX lists containing at least one
 	// gosh-managed option. Supported Bash options use interp.BashOpts, and
-	// gosh-managed options still require the mirrored option slice below.
+	// gosh-managed options are stored in the mirrored option state above.
 	hc := interp.HandlerCtx(ctx)
 	for _, arg := range parsed.args {
 		if shoptManagedOption(arg) {
 			// Upstream declares these options unsupported, so BashOpts cannot
-			// set them. gosh manages them directly; this is the one remaining
-			// reflection path for option mutation.
-			opt, supported, managed := shoptOption(runner, false, arg)
+			// set them. gosh manages them in its own option state.
+			opt, supported, managed := shoptOption(opts, false, arg)
 			if opt == nil || !supported || !managed {
 				fmt.Fprintf(hc.Stderr, "shopt: unsupported option %q\n", arg)
 				return interp.ExitStatus(1)
@@ -285,52 +302,29 @@ func setShoptOptions(ctx context.Context, runner *interp.Runner, parsed shoptArg
 			}
 			return interp.ExitStatus(1)
 		}
+		opts.set(false, arg, parsed.mode == "-s")
 	}
 	return nil
 }
 
-func shoptOptionEnabled(runner *interp.Runner, posix bool, name string) (bool, bool) {
-	opt, _, _ := shoptOption(runner, posix, name)
+func shoptOptionEnabled(opts *shellOptions, posix bool, name string) (bool, bool) {
+	opt, _, _ := shoptOption(opts, posix, name)
 	if opt == nil {
 		return false, false
 	}
 	return *opt, true
 }
 
-func shoptEnabled(runner *interp.Runner, name string) bool {
-	enabled, ok := shoptOptionEnabled(runner, false, name)
+func shoptEnabled(opts *shellOptions, name string) bool {
+	enabled, ok := shoptOptionEnabled(opts, false, name)
 	return ok && enabled
 }
 
-func shoptOption(runner *interp.Runner, posix bool, name string) (*bool, bool, bool) {
-	// Reads the interpreter's unexported option slice because interp exposes
-	// option mutation via BashOpts but has no getter needed by "shopt -q" and
-	// option listing. Keep the mirrored tables in sync with upstream;
-	// TestShoptListMatchesUpstream guards their order and state mapping.
-	opts := runnerOpts(runner)
-	if posix {
-		for i, opt := range shoptPosixOptionNames {
-			if opt == name {
-				if i >= len(opts) {
-					return nil, false, false
-				}
-				return &opts[i], true, false
-			}
-		}
+func shoptOption(opts *shellOptions, posix bool, name string) (*bool, bool, bool) {
+	if opts == nil {
 		return nil, false, false
 	}
-	for i, opt := range shoptBashOptionNames {
-		if opt == name {
-			index := len(shoptPosixOptionNames) + i
-			if index >= len(opts) {
-				return nil, false, false
-			}
-			managed := shoptManagedOption(opt)
-			supported := managed || shoptBuiltinSupportedOption(opt)
-			return &opts[index], supported, managed
-		}
-	}
-	return nil, false, false
+	return opts.option(posix, name)
 }
 
 func shoptArgsHaveManagedOption(args []string) bool {
@@ -360,20 +354,20 @@ func shoptBuiltinSupportedOption(name string) bool {
 
 func printShoptOptions(w interface {
 	Write([]byte) (int, error)
-}, runner *interp.Runner, posix bool) {
+}, opts *shellOptions, posix bool) {
 	names := shoptBashOptionNames
 	if posix {
 		names = shoptPosixOptionNames
 	}
 	for _, name := range names {
-		printShoptOption(w, runner, posix, name)
+		printShoptOption(w, opts, posix, name)
 	}
 }
 
 func printShoptOption(w interface {
 	Write([]byte) (int, error)
-}, runner *interp.Runner, posix bool, name string) {
-	opt, supported, _ := shoptOption(runner, posix, name)
+}, opts *shellOptions, posix bool, name string) {
+	opt, supported, _ := shoptOption(opts, posix, name)
 	if opt == nil {
 		return
 	}

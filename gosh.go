@@ -5,7 +5,9 @@
 // that make it usable as a Bash-flavored interactive shell: history,
 // prompts, completion, and key bindings.
 //
-// Run executes one shell invocation; see Config for the available options.
+// Run executes one shell invocation. New returns a reusable Shell which can
+// evaluate scripts and drive the interactive frontend independently; see
+// Config and Shell for the available options.
 package gosh
 
 import (
@@ -14,6 +16,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -38,176 +41,296 @@ type Config struct {
 	OnPromptReset func(context.Context)
 }
 
+// Run executes one shell invocation. It is a convenience wrapper around New
+// followed by Shell.Run, for callers that only need a single-shot CLI.
 func Run(c Config) error {
-	version := c.Version
-	if version == "" {
-		version = "0.0.0"
-	}
-
-	args := c.Args
-	if len(args) == 0 {
-		args = []string{"gosh"}
-	}
-	stdin := c.Stdin
-	if stdin == nil {
-		stdin = strings.NewReader("")
-	}
-	stdout := c.Stdout
-	if stdout == nil {
-		stdout = io.Discard
-	}
-	stderr := c.Stderr
-	if stderr == nil {
-		stderr = io.Discard
-	}
-	env := environWithDefaultShell(c.Env)
-
-	command, err := parseCommand(args)
+	s, err := New(c)
 	if err != nil {
 		return err
 	}
-	interactive := c.IsTerminal && command == nil
-	if interactive {
-		env = SetEnv(env, "GOSH_INTERACTIVE", "1")
-	}
-	stdinForRunner := stdin
-	if command == nil && !interactive {
-		stdinForRunner = strings.NewReader("")
+	return s.Run(c.Context)
+}
+
+// Shell is a reusable shell runtime. One Shell owns one interpreter, its
+// option state, history, key bindings, and (when interactive) the readline
+// frontend, so embedders can evaluate scripts and then attach a user
+// interface without losing shell state.
+type Shell struct {
+	cfg         Config
+	version     string
+	args        []string
+	stdin       io.Reader
+	runnerStdin io.Reader
+	stdout      io.Writer
+	stderr      io.Writer
+	env         []string
+	dir         string
+	command     *commandSpec
+	interactive bool
+
+	baseCtx context.Context
+
+	parser   *syntax.Parser
+	runner   *interp.Runner
+	history  *history
+	bindings *keyBindingManager
+	opts     *shellOptions
+	rl       *readline.Instance
+
+	hostname     string
+	homeFallback string
+	userFallback string
+}
+
+// New creates a Shell from cfg. The interpreter, default bindings, and (for
+// interactive shells) the init file are prepared eagerly so that Eval and
+// Interactive can share the same state.
+func New(c Config) (*Shell, error) {
+	s := &Shell{cfg: c, dir: c.Dir}
+	s.version = c.Version
+	if s.version == "" {
+		s.version = "0.0.0"
 	}
 
-	ctx := c.Context
-	if ctx == nil {
-		ctx = context.Background()
+	s.args = c.Args
+	if len(s.args) == 0 {
+		s.args = []string{"gosh"}
 	}
-	if c.NotifySignals {
-		signals := []os.Signal{syscall.SIGTERM}
-		if !interactive {
-			signals = append(signals, os.Interrupt)
-		}
+	s.stdin = c.Stdin
+	if s.stdin == nil {
+		s.stdin = strings.NewReader("")
+	}
+	s.runnerStdin = s.stdin
+	s.stdout = c.Stdout
+	if s.stdout == nil {
+		s.stdout = io.Discard
+	}
+	s.stderr = c.Stderr
+	if s.stderr == nil {
+		s.stderr = io.Discard
+	}
+	s.env = environWithDefaultShell(c.Env)
 
-		var cancel context.CancelFunc
-		ctx, cancel = signal.NotifyContext(ctx, signals...)
-		defer cancel()
+	command, err := parseCommand(s.args)
+	if err != nil {
+		return nil, err
+	}
+	s.command = command
+	s.interactive = c.IsTerminal && command == nil
+	if s.interactive {
+		s.env = SetEnv(s.env, "GOSH_INTERACTIVE", "1")
+	}
+	if command == nil && !s.interactive {
+		s.runnerStdin = strings.NewReader("")
 	}
 
-	if c.IsTerminal && c.OnPromptReset != nil {
-		c.OnPromptReset(ctx)
+	s.baseCtx = c.Context
+	if s.baseCtx == nil {
+		s.baseCtx = context.Background()
 	}
-	// getScreenWidth delegates to readline once the instance exists, keeping
-	// terminal size detection inside the vendored readline's platform code.
-	var rl *readline.Instance
-	getScreenWidth := func() int {
-		if rl != nil {
-			if width, _ := rl.GetConfig().FuncGetSize(); width > 0 {
-				return width
-			}
-		}
-		return 0
+	s.hostname, _ = lookupEnv(s.env, "HOSTNAME")
+	if s.hostname == "" {
+		s.hostname, _ = os.Hostname()
+	}
+	if s.hostname == "" {
+		s.hostname = "localhost"
+	}
+	s.homeFallback, _ = lookupEnv(s.env, "HOME")
+	if s.homeFallback == "" {
+		s.homeFallback, _ = os.UserHomeDir()
+	}
+	s.userFallback, _ = lookupEnv(s.env, "USER")
+	if s.userFallback == "" {
+		s.userFallback = strconv.Itoa(os.Getuid())
 	}
 
+	if err := s.initialize(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Shell) initialize() error {
 	opts := []interp.RunnerOption{
 		interp.Interactive(true),
-		interp.StdIO(stdinForRunner, stdout, stderr),
-		interp.Env(expand.ListEnviron(env...)),
+		interp.StdIO(s.runnerStdin, s.stdout, s.stderr),
+		interp.Env(expand.ListEnviron(s.env...)),
 	}
-	if c.Dir != "" {
-		opts = append(opts, interp.Dir(c.Dir))
+	if s.dir != "" {
+		opts = append(opts, interp.Dir(s.dir))
 	}
 
-	parser := syntax.NewParser()
-	history := &history{limit: resolveHistoryLimit()}
-	bindings := &keyBindingManager{entries: make(map[string]*goKeyBindingEntry)}
-	var runner *interp.Runner
-	opts = append(opts, interp.CallHandler(callHandler(func() *interp.Runner { return runner }, history, bindings)))
-	opts = append(opts, interp.ExecHandlers(execHandler(func() *interp.Runner { return runner })))
-	runner, err = interp.New(opts...)
+	s.parser = syntax.NewParser()
+	s.history = &history{limit: resolveHistoryLimit()}
+	s.bindings = &keyBindingManager{entries: make(map[string]*goKeyBindingEntry)}
+	s.opts = newShellOptions(s.interactive)
+
+	deps := callDeps{
+		runner:   func() *interp.Runner { return s.runner },
+		history:  s.history,
+		bindings: s.bindings,
+		opts:     s.opts,
+	}
+	opts = append(opts, interp.CallHandler(callHandler(deps)))
+	opts = append(opts, interp.ExecHandlers(execHandler(deps.runner, s.opts)))
+
+	runner, err := interp.New(opts...)
 	if err != nil {
 		return err
 	}
-	installShellOptionVariable(runner, version)
+	s.runner = runner
+	installShellOptionVariable(runner, s.version)
 
-	runner.Run(ctx, func() *syntax.File {
-		prog, err := parser.Parse(strings.NewReader(`
-			bind '"\e[1~": beginning-of-line'
-			bind '"\e[4~": end-of-line'
-			bind '"\e[5~": previous-screen'
-			bind '"\e[6~": next-screen'
-			bind '"\e[F": end-of-line'
-			bind '"\e[H": beginning-of-line'
-			bind '"\eOF": end-of-line'
-			bind '"\eOH": beginning-of-line'
-		`), "")
-		if err != nil {
-			panic(err)
-		}
-		return prog
-	}())
+	prog, err := s.parser.Parse(strings.NewReader(`
+		bind '"\e[1~": beginning-of-line'
+		bind '"\e[4~": end-of-line'
+		bind '"\e[5~": previous-screen'
+		bind '"\e[6~": next-screen'
+		bind '"\e[F": end-of-line'
+		bind '"\e[H": beginning-of-line'
+		bind '"\eOF": end-of-line'
+		bind '"\eOH": beginning-of-line'
+	`), "")
+	if err != nil {
+		return err
+	}
+	if err := runner.Run(s.baseCtx, prog); err != nil {
+		return err
+	}
 
 	// Source the interactive init file.
-	if interactive {
-		file, err := os.Open(resolveInitFile(env, interactive))
+	if s.interactive {
+		file, err := os.Open(resolveInitFile(s.env, true))
 		if err == nil {
-			prog, err := parser.Parse(file, file.Name())
+			prog, err := s.parser.Parse(file, file.Name())
 			if err != nil {
-				fmt.Fprintln(stderr, "failed to parse", file.Name(), ":", err)
-			} else {
-				if err := runner.Run(ctx, prog); err != nil {
-					fmt.Fprintln(stderr, "failed to run", file.Name(), ":", err)
-				}
+				fmt.Fprintln(s.stderr, "failed to parse", file.Name(), ":", err)
+			} else if err := runner.Run(s.baseCtx, prog); err != nil {
+				fmt.Fprintln(s.stderr, "failed to run", file.Name(), ":", err)
 			}
 			file.Close()
 		}
 	}
+	return nil
+}
 
-	if command != nil {
-		script := command.script
-		if !strings.HasSuffix(script, "\n") {
-			script += "\n"
-		}
-		prog, err := parser.Parse(strings.NewReader(script), command.argv0)
-		if err != nil {
-			return err
-		}
-		runner.Reset()
-		if len(command.params) != 0 {
-			runner.Params = append([]string(nil), command.params...)
-		} else {
-			runner.Params = nil
-		}
-		return runner.Run(ctx, prog)
+func (s *Shell) runContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = s.baseCtx
 	}
-
-	// Non-interactive: parse stdin as a script and run it directly.
-	if !interactive {
-		runner.Reset()
-		return runNonInteractiveStream(ctx, stdin, runner, stdout, stderr)
+	if !s.cfgNotifySignals() {
+		return ctx, func() {}
 	}
+	signals := []os.Signal{syscall.SIGTERM}
+	if !s.interactive {
+		signals = append(signals, os.Interrupt)
+	}
+	return signal.NotifyContext(ctx, signals...)
+}
 
-	promptFallback := defaultPrompt(version)
+func (s *Shell) cfgNotifySignals() bool {
+	return s.cfg.NotifySignals
+}
+
+// Run executes the shell invocation described by Config. When ctx is nil,
+// Config.Context (or context.Background) is used.
+func (s *Shell) Run(ctx context.Context) error {
+	ctx, cancel := s.runContext(ctx)
+	defer cancel()
+	if s.cfg.IsTerminal && s.cfg.OnPromptReset != nil {
+		s.cfg.OnPromptReset(ctx)
+	}
+	switch {
+	case s.command != nil:
+		return s.runCommand(ctx)
+	case s.interactive:
+		return s.runInteractive(ctx)
+	default:
+		s.runner.Reset()
+		s.opts.reset(s.interactive)
+		return runNonInteractiveStream(ctx, s.stdin, s.runner, s.stdout, s.stderr)
+	}
+}
+
+// Eval parses and evaluates script in the Shell's interpreter, preserving
+// variables, functions, options, and working directory for later calls.
+func (s *Shell) Eval(ctx context.Context, script string) error {
+	if ctx == nil {
+		ctx = s.baseCtx
+	}
+	prog, err := s.parser.Parse(strings.NewReader(script), "")
+	if err != nil {
+		return err
+	}
+	return s.runner.Run(ctx, prog)
+}
+
+// Interactive starts the readline-driven interactive frontend on the
+// Shell's current interpreter state.
+func (s *Shell) Interactive(ctx context.Context) error {
+	ctx, cancel := s.runContext(ctx)
+	defer cancel()
+	if s.cfg.IsTerminal && s.cfg.OnPromptReset != nil {
+		s.cfg.OnPromptReset(ctx)
+	}
+	return s.runInteractive(ctx)
+}
+
+func (s *Shell) runCommand(ctx context.Context) error {
+	script := s.command.script
+	if !strings.HasSuffix(script, "\n") {
+		script += "\n"
+	}
+	prog, err := s.parser.Parse(strings.NewReader(script), s.command.argv0)
+	if err != nil {
+		return err
+	}
+	s.runner.Reset()
+	s.opts.reset(s.interactive)
+	if len(s.command.params) != 0 {
+		s.runner.Params = append([]string(nil), s.command.params...)
+	} else {
+		s.runner.Params = nil
+	}
+	return s.runner.Run(ctx, prog)
+}
+
+func (s *Shell) runInteractive(ctx context.Context) error {
+	promptFallback := defaultPrompt(s.version)
 	promptSeq := 1
-	currentPrompt := promptString(ctx, runner, history, stdin, stderr, "PS1", promptFallback, promptSeq)
+	currentPrompt := promptString(ctx, s.runner, s.opts, s.history, s.stdin, s.stderr, s.hostname, s.homeFallback, s.userFallback, "PS1", promptFallback, promptSeq)
 	promptSeq++
 
 	// export HISTFILE=""
-	history.limit = resolveShellHistoryLimit(runner)
-	history.control = resolveShellHistoryControl(runner)
-	histFile := resolveShellHistoryFile(runner)
-	history.file = histFile
-	history.appendOnAdd = func() bool {
-		enabled, _ := shoptOptionEnabled(runner, false, "histappend")
+	s.history.limit = resolveShellHistoryLimit(s.runner)
+	s.history.control = resolveShellHistoryControl(s.runner)
+	histFile := resolveShellHistoryFile(s.runner)
+	s.history.file = histFile
+	s.history.appendOnAdd = func() bool {
+		enabled, _ := shoptOptionEnabled(s.opts, false, "histappend")
 		return enabled
 	}
 
-	conWriter := ptyNewConsoleANSIWriter(stderr)
-	boundStdin := &keyBindingInput{src: stdin, mgr: bindings}
+	conWriter := ptyNewConsoleANSIWriter(s.stderr)
+	boundStdin := &keyBindingInput{src: s.stdin, mgr: s.bindings}
 	promptPrinter := &promptPrinter{}
-	completer := &autoCompleter{ctx: ctx, runner: runner, stdin: stdin, stdout: conWriter, stderr: conWriter, promptPrinter: promptPrinter}
-	historySearch := &historySearch{history: history, searchIndex: -1}
-	bindings.registerActionHandler(keyActionHistorySearchBackward, historySearch.Search)
-	bindings.registerActionHandler(keyActionHistorySearchForward, historySearch.Search)
-	rl, err = readline.NewEx(&readline.Config{
+	completer := &autoCompleter{
+		ctx:           ctx,
+		runner:        s.runner,
+		opts:          s.opts,
+		stdin:         s.stdin,
+		stdout:        conWriter,
+		stderr:        conWriter,
+		promptPrinter: promptPrinter,
+		defaultHome:   s.homeFallback,
+	}
+	historySearch := &historySearch{history: s.history, searchIndex: -1}
+	s.bindings.registerActionHandler(keyActionHistorySearchBackward, historySearch.Search)
+	s.bindings.registerActionHandler(keyActionHistorySearchForward, historySearch.Search)
+
+	rl, err := readline.NewEx(&readline.Config{
 		Prompt:                 currentPrompt.prompt,
-		HistoryLimit:           history.limit,
+		HistoryLimit:           s.history.limit,
 		DisableAutoSaveHistory: true,
 		InterruptPrompt:        "^C",
 		EOFPrompt:              "exit",
@@ -220,18 +343,30 @@ func Run(c Config) error {
 	if err != nil {
 		return err
 	}
-	history.resync = func() {
+	s.rl = rl
+	defer func() {
+		_ = rl.Close()
+		s.rl = nil
+	}()
+
+	s.history.resync = func() {
 		rl.ResetHistory()
-		for _, entry := range history.Entries() {
+		for _, entry := range s.history.Entries() {
 			_ = rl.SaveToHistory(entry)
 		}
 	}
-	_ = history.LoadFile(histFile)
-	history.resync()
+	if err := s.history.LoadFile(histFile); err != nil {
+		fmt.Fprintln(rl.Stderr(), "failed to load history:", err)
+	}
+	s.history.resync()
 	completer.attach(rl)
 	historySearch.Attach(rl)
-	updateCheckwinsizeColumns(runner, getScreenWidth)
-	defer rl.Close()
+	updateCheckwinsizeColumns(s.opts, s.runner, func() int {
+		if width, _ := rl.GetConfig().FuncGetSize(); width > 0 {
+			return width
+		}
+		return 0
+	})
 	promptPrinter.Print(rl.Stdout(), currentPrompt.prefix)
 	nextPrefix := ""
 	setPrompt := func(parts promptParts) {
@@ -246,36 +381,54 @@ func Run(c Config) error {
 		nextPrefix = ""
 	}
 	resetPrompt := func() {
-		if c.IsTerminal && c.OnPromptReset != nil {
+		if s.cfg.IsTerminal && s.cfg.OnPromptReset != nil {
 			// Windows consoles may lose VT mode after programs exit.
-			c.OnPromptReset(ctx)
+			s.cfg.OnPromptReset(ctx)
 		}
-		updateCheckwinsizeColumns(runner, getScreenWidth)
-		setPrompt(promptString(ctx, runner, history, stdin, stderr, "PS1", defaultPrompt(version), promptSeq))
+		updateCheckwinsizeColumns(s.opts, s.runner, func() int {
+			if width, _ := rl.GetConfig().FuncGetSize(); width > 0 {
+				return width
+			}
+			return 0
+		})
+		setPrompt(promptString(ctx, s.runner, s.opts, s.history, s.stdin, s.stderr, s.hostname, s.homeFallback, s.userFallback, "PS1", defaultPrompt(s.version), promptSeq))
 		promptSeq++
 		flushPrefix()
 	}
+
+	// Context cancellation must interrupt a blocking Readline, otherwise an
+	// embedder cannot stop an interactive session that is waiting at the
+	// prompt. readline.Close is safe to call from another goroutine.
+	interrupted := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = rl.Close()
+		case <-interrupted:
+		}
+	}()
+	defer close(interrupted)
 
 	// reader wraps readline so parser.Interactive can consume it as an
 	// io.Reader. Each call to Read invokes Readline() to fetch one line.
 	// Ctrl-C (ErrInterrupt) injects a newline to abandon the current
 	// incomplete statement. Ctrl-D / EOF returns io.EOF to end the session.
-	rdr := &reader{rl: rl, history: history}
+	rdr := &reader{rl: rl, history: s.history}
 
 	var exitErr error
-	err = runInteractiveParser(parser, rdr, func(stmts []*syntax.Stmt) bool {
+	err = runInteractiveParser(s.parser, rdr, func(stmts []*syntax.Stmt) bool {
 		// parser.Incomplete() returns true when the parser has consumed a
 		// partial statement and is waiting for more input (e.g. open quotes,
 		// unclosed if/for blocks). Switch to the continuation prompt and keep
 		// reading without executing anything yet.
-		if parser.Incomplete() {
-			setPrompt(promptString(ctx, runner, history, stdin, stderr, "PS2", "> ", promptSeq))
+		if s.parser.Incomplete() {
+			setPrompt(promptString(ctx, s.runner, s.opts, s.history, s.stdin, s.stderr, s.hostname, s.homeFallback, s.userFallback, "PS2", "> ", promptSeq))
 			flushPrefix()
 			return true
 		}
 
 		rdr.savePendingHistory()
-		cont, err := runInteractiveStatements(ctx, runner, stmts, rl.Stderr())
+		cont, err := runInteractiveStatements(ctx, s.runner, stmts, rl.Stderr())
 		if !cont {
 			exitErr = err
 			return false
@@ -291,8 +444,10 @@ func Run(c Config) error {
 		resetPrompt()
 		return true
 	})
-	if history.fileDirty() {
-		_ = history.RewriteFile()
+	if s.history.fileDirty() {
+		if rewriteErr := s.history.RewriteFile(); rewriteErr != nil {
+			fmt.Fprintln(rl.Stderr(), "failed to rewrite history:", rewriteErr)
+		}
 	}
 	if exitErr != nil {
 		return exitErr

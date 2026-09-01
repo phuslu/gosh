@@ -21,10 +21,12 @@ import (
 type autoCompleter struct {
 	ctx           context.Context
 	runner        *interp.Runner
+	opts          *shellOptions
 	stdin         io.Reader
 	stdout        io.Writer
 	stderr        io.Writer
 	promptPrinter *promptPrinter
+	defaultHome   string
 
 	rlMu sync.Mutex
 	rl   *readline.Instance
@@ -46,7 +48,7 @@ func (c *autoCompleter) attach(rl *readline.Instance) {
 func (c *autoCompleter) Do(line []rune, pos int) ([][]rune, int) {
 	ctx := c.completionContext(line, pos)
 	var options []string
-	if !ctx.isCommand && shoptEnabled(c.runner, "hostcomplete") {
+	if !ctx.isCommand && shoptEnabled(c.opts, "hostcomplete") {
 		options = c.hostCandidates(ctx.prefix)
 	}
 	if len(options) == 0 && ctx.isCommand && !strings.ContainsAny(ctx.prefix, "/\\") {
@@ -239,13 +241,7 @@ func (c *autoCompleter) resolveCommand(line []rune, wordStart int) string {
 
 func (c *autoCompleter) commandCandidates(prefix string) []string {
 	path := c.shellVar("PATH")
-	if path == "" {
-		path = os.Getenv("PATH")
-	}
 	pathExt := c.shellVar("PATHEXT")
-	if pathExt == "" {
-		pathExt = os.Getenv("PATHEXT")
-	}
 	funcStamp := c.functionStamp()
 	home := c.userHome()
 	commands := c.commandIndex(path, pathExt, funcStamp, home)
@@ -448,13 +444,7 @@ func (c *autoCompleter) buildCommandIndexLocked(path, pathExt, home string) []st
 				dir = expanded
 			}
 			if !filepath.IsAbs(dir) {
-				base := c.runner.Dir
-				if base == "" {
-					if wd, err := os.Getwd(); err == nil {
-						base = wd
-					}
-				}
-				dir = filepath.Join(base, dir)
+				dir = filepath.Join(c.runner.Dir, dir)
 			}
 			entries, err := os.ReadDir(dir)
 			if err != nil {
@@ -531,13 +521,7 @@ func (c *autoCompleter) pathCandidates(prefix string, dirsOnly bool) []string {
 	}
 	clean := filepath.Clean(search)
 	if !filepath.IsAbs(clean) {
-		cwd := c.runner.Dir
-		if cwd == "" {
-			if wd, err := os.Getwd(); err == nil {
-				cwd = wd
-			}
-		}
-		clean = filepath.Join(cwd, clean)
+		clean = filepath.Join(c.runner.Dir, clean)
 	}
 	entries, err := os.ReadDir(clean)
 	if err != nil {
@@ -586,13 +570,7 @@ func (c *autoCompleter) completionOptionIsDir(ctx completionContext, option stri
 		resolved = expanded
 	}
 	if !filepath.IsAbs(resolved) {
-		base := c.runner.Dir
-		if base == "" {
-			if wd, err := os.Getwd(); err == nil {
-				base = wd
-			}
-		}
-		resolved = filepath.Join(base, resolved)
+		resolved = filepath.Join(c.runner.Dir, resolved)
 	}
 	if info, err := os.Stat(resolved); err == nil {
 		return info.IsDir()
@@ -746,18 +724,17 @@ func shouldEscapeCompletionRune(r rune, quote rune) bool {
 func (c *autoCompleter) shellVar(name string) string {
 	script := fmt.Sprintf("printf %%s \"${%s-}\"", name)
 	val, err := runSubshell(c.ctx, c.runner, c.stdin, c.stderr, script)
-	if err == nil && val != "" {
-		return val
+	if err != nil {
+		return ""
 	}
-	return os.Getenv(name)
+	return val
 }
 
 func (c *autoCompleter) userHome() string {
 	if home := c.shellVar("HOME"); home != "" {
 		return home
 	}
-	home, _ := os.UserHomeDir()
-	return home
+	return c.defaultHome
 }
 
 func (c *autoCompleter) functionStamp() string {

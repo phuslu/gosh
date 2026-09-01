@@ -34,26 +34,28 @@ func shortVersion(version string) string {
 	return version
 }
 
-func promptString(ctx context.Context, runner *interp.Runner, history *history, stdin io.Reader, stderr io.Writer, name, fallback string, seq int) promptParts {
-	host := "localhost"
-	if h, err := os.Hostname(); err == nil {
-		host = h
+func promptString(ctx context.Context, runner *interp.Runner, opts *shellOptions, history *history, stdin io.Reader, stderr io.Writer, host, homeFallback, userFallback, name, fallback string, seq int) promptParts {
+	if host == "" {
+		host = "localhost"
 	}
 	short := host
 	if idx := strings.IndexByte(host, '.'); idx >= 0 {
 		short = host[:idx]
 	}
 	state := &promptState{
-		ctx:       ctx,
-		runner:    runner,
-		stdin:     stdin,
-		stderr:    stderr,
-		dir:       runner.Dir,
-		host:      host,
-		shortHost: short,
-		history:   history,
-		seq:       seq,
-		now:       time.Now(),
+		ctx:          ctx,
+		runner:       runner,
+		opts:         opts,
+		stdin:        stdin,
+		stderr:       stderr,
+		dir:          runner.Dir,
+		host:         host,
+		shortHost:    short,
+		history:      history,
+		seq:          seq,
+		now:          time.Now(),
+		homeFallback: homeFallback,
+		userFallback: userFallback,
 	}
 	val, err := state.runScript(fmt.Sprintf("printf %%s \"${%s-}\"", name))
 	if err != nil || val == "" {
@@ -100,17 +102,20 @@ func splitPromptLines(val string) promptParts {
 }
 
 type promptState struct {
-	ctx       context.Context
-	runner    *interp.Runner
-	stdin     io.Reader
-	stderr    io.Writer
-	vars      map[string]string
-	dir       string
-	host      string
-	shortHost string
-	history   *history
-	seq       int
-	now       time.Time
+	ctx          context.Context
+	runner       *interp.Runner
+	opts         *shellOptions
+	stdin        io.Reader
+	stderr       io.Writer
+	vars         map[string]string
+	dir          string
+	host         string
+	shortHost    string
+	history      *history
+	seq          int
+	now          time.Time
+	homeFallback string
+	userFallback string
 }
 
 func (p *promptState) shellVar(name string) string {
@@ -133,8 +138,8 @@ func (p *promptState) user() string {
 	if val := p.shellVar("USER"); val != "" {
 		return val
 	}
-	if val := os.Getenv("USER"); val != "" {
-		return val
+	if p.userFallback != "" {
+		return p.userFallback
 	}
 	return fmt.Sprintf("%d", os.Getuid())
 }
@@ -143,8 +148,7 @@ func (p *promptState) home() string {
 	if val := p.shellVar("HOME"); val != "" {
 		return val
 	}
-	home, _ := os.UserHomeDir()
-	return home
+	return p.homeFallback
 }
 
 func (p *promptState) pwd() string {
@@ -167,7 +171,7 @@ func (p *promptState) promptSymbol() string {
 // promptvars reports whether parameter expansion and command substitution
 // should be performed on the prompt string, per the Bash promptvars option.
 func (p *promptState) promptvars() bool {
-	return p.runner == nil || shoptEnabled(p.runner, "promptvars")
+	return p.opts == nil || shoptEnabled(p.opts, "promptvars")
 }
 
 // historyNumber returns the number Bash assigns to the command about to be

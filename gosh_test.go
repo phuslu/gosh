@@ -774,10 +774,12 @@ func TestPromptvarsDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("interp.New failed: %v", err)
 	}
+	opts := newShellOptions(true)
 
 	state := &promptState{
 		ctx:    ctx,
 		runner: runner,
+		opts:   opts,
 		stdin:  strings.NewReader(""),
 		stderr: &stderr,
 		vars:   map[string]string{"HOME": "/home/alice"},
@@ -790,7 +792,7 @@ func TestPromptvarsDisabled(t *testing.T) {
 		t.Fatalf("prompt with promptvars on = %q, want %q", got, want)
 	}
 
-	opt, _, managed := shoptOption(runner, false, "promptvars")
+	opt, _, managed := shoptOption(opts, false, "promptvars")
 	if opt == nil || !managed {
 		t.Fatalf("promptvars should be a gosh-managed option")
 	}
@@ -1000,7 +1002,7 @@ func TestShoptListMatchesUpstream(t *testing.T) {
 		}
 
 		var got bytes.Buffer
-		printShoptOptions(&got, runner, posix)
+		printShoptOptions(&got, newShellOptions(false), posix)
 		gotEntries := shoptListingEntries(got.String())
 		wantEntries := shoptListingEntries(upstreamOut.String())
 		if !reflect.DeepEqual(gotEntries, wantEntries) {
