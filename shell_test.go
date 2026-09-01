@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -109,5 +111,60 @@ func TestInteractiveContextCancellation(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("context cancellation did not interrupt readline")
+	}
+}
+
+func TestOpenScriptSourcePipe(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.WriteString("echo pipe-input\n"); err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+	defer reader.Close()
+
+	src, err := openScriptSource(reader)
+	if err != nil {
+		t.Fatalf("openScriptSource(pipe): %v", err)
+	}
+	defer src.Close()
+	if got, want := string(src.Data()), "echo pipe-input\n"; got != want {
+		t.Fatalf("pipe data = %q, want %q", got, want)
+	}
+}
+
+func TestOpenScriptSourceLargeFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "large.sh")
+	content := strings.Repeat("echo large\n", scriptSourceThreshold/10)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	src, err := openScriptSource(file)
+	if err != nil {
+		t.Fatalf("openScriptSource(large file): %v", err)
+	}
+	defer src.Close()
+	if got := string(src.Data()); got != content {
+		t.Fatalf("large file data mismatch: got %d bytes, want %d", len(got), len(content))
+	}
+	stdin, err := src.StdinFile()
+	if err != nil {
+		t.Fatalf("StdinFile: %v", err)
+	}
+	readBack, err := io.ReadAll(stdin)
+	if err != nil {
+		t.Fatalf("read StdinFile: %v", err)
+	}
+	if string(readBack) != content {
+		t.Fatalf("StdinFile data mismatch")
 	}
 }

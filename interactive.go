@@ -27,18 +27,16 @@ func runInteractiveParser(parser *syntax.Parser, r io.Reader, run func([]*syntax
 }
 
 func runNonInteractiveStream(ctx context.Context, r io.Reader, runner *interp.Runner, stdout, stderr io.Writer) error {
-	data, err := io.ReadAll(r)
+	src, err := openScriptSource(r)
 	if err != nil {
 		return err
 	}
-	stdin, err := newStdinFile(data)
+	defer src.Close()
+	stdin, err := src.StdinFile()
 	if err != nil {
 		return err
 	}
-	defer func() {
-		stdin.Close()
-		os.Remove(stdin.Name())
-	}()
+	data := src.Data()
 	var runErr error
 	var lastStatus error
 	for offset := 0; offset < len(data); {
