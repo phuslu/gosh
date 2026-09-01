@@ -126,6 +126,16 @@ func callHandler(runner func() *interp.Runner, history *history, bindings *keyBi
 				return []string{"false"}, nil
 			}
 			return []string{":"}, nil
+		case "fc":
+			if history == nil {
+				return args, nil
+			}
+			hc := interp.HandlerCtx(ctx)
+			if err := builtinFc(history, args[1:], hc.Stdout); err != nil {
+				fmt.Fprintln(hc.Stderr, err)
+				return []string{"false"}, nil
+			}
+			return []string{":"}, nil
 		case "bind":
 			if bindings == nil {
 				return args, nil
@@ -224,6 +234,61 @@ func builtinHistory(h *history, args []string, stdout io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// builtinFc implements the `fc -l [first [last]]` subset of the fc builtin.
+// Offsets are 1-based history positions; negative offsets count from the
+// end. The default range is the last 16 entries, printed chronologically.
+func builtinFc(h *history, args []string, stdout io.Writer) error {
+	if h == nil {
+		return fmt.Errorf("fc: no history")
+	}
+	if len(args) == 0 || args[0] != "-l" {
+		return fmt.Errorf("fc: only `fc -l` is supported")
+	}
+	args = args[1:]
+	if len(args) > 2 {
+		return fmt.Errorf("fc: too many arguments")
+	}
+
+	entries := h.Entries()
+	n := len(entries)
+	if n == 0 {
+		return nil
+	}
+	first, last := n-15, n
+	if first < 1 {
+		first = 1
+	}
+	var err error
+	if len(args) >= 1 && args[0] != "" {
+		if first, err = fcOffset(args[0], n); err != nil {
+			return err
+		}
+	}
+	if len(args) >= 2 {
+		if last, err = fcOffset(args[1], n); err != nil {
+			return err
+		}
+	}
+	if first < 1 || last < 1 || first > last || last > n {
+		return fmt.Errorf("fc: history specification out of range")
+	}
+	for i := first; i <= last; i++ {
+		fmt.Fprintf(stdout, "%d\t%s\n", i, entries[i-1])
+	}
+	return nil
+}
+
+func fcOffset(spec string, n int) (int, error) {
+	off, err := strconv.Atoi(spec)
+	if err != nil {
+		return 0, fmt.Errorf("fc: invalid history specification %q", spec)
+	}
+	if off < 0 {
+		off += n + 1
+	}
+	return off, nil
 }
 
 func dropBuiltinPrintfDashDash(args []string) ([]string, bool) {

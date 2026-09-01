@@ -377,6 +377,78 @@ func TestRunHistoryBuiltin(t *testing.T) {
 	}
 }
 
+func TestBuiltinFc(t *testing.T) {
+	h := &history{limit: 100}
+	for i := 0; i < 20; i++ {
+		h.append(fmt.Sprintf("cmd-%d", i))
+	}
+
+	var out bytes.Buffer
+	if err := builtinFc(h, []string{"-l"}, &out); err != nil {
+		t.Fatalf("fc -l failed: %v", err)
+	}
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(lines) != 16 || lines[0] != "5\tcmd-4" || lines[15] != "20\tcmd-19" {
+		t.Fatalf("fc -l default range = %q", out.String())
+	}
+
+	out.Reset()
+	if err := builtinFc(h, []string{"-l", "3", "5"}, &out); err != nil {
+		t.Fatalf("fc -l 3 5 failed: %v", err)
+	}
+	if got, want := out.String(), "3\tcmd-2\n4\tcmd-3\n5\tcmd-4\n"; got != want {
+		t.Fatalf("fc -l 3 5 = %q, want %q", got, want)
+	}
+
+	out.Reset()
+	if err := builtinFc(h, []string{"-l", "-2", "-1"}, &out); err != nil {
+		t.Fatalf("fc -l -2 -1 failed: %v", err)
+	}
+	if got, want := out.String(), "19\tcmd-18\n20\tcmd-19\n"; got != want {
+		t.Fatalf("fc -l -2 -1 = %q, want %q", got, want)
+	}
+
+	if err := builtinFc(h, nil, &out); err == nil {
+		t.Fatalf("fc without -l should fail")
+	}
+	if err := builtinFc(h, []string{"-l", "abc"}, &out); err == nil {
+		t.Fatalf("fc -l with invalid offset should fail")
+	}
+	if err := builtinFc(h, []string{"-l", "10", "5"}, &out); err == nil {
+		t.Fatalf("fc -l with reversed range should fail")
+	}
+
+	var empty bytes.Buffer
+	if err := builtinFc(&history{}, []string{"-l"}, &empty); err != nil {
+		t.Fatalf("fc -l with empty history failed: %v", err)
+	}
+	if empty.Len() != 0 {
+		t.Fatalf("fc -l with empty history = %q, want empty", empty.String())
+	}
+}
+
+func TestRunFcBuiltin(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args: []string{"gosh", "-c", `
+			fc -l
+			fc 2>/dev/null || echo no-fc
+		`},
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Env:    testEnv(t),
+	})
+	if err != nil {
+		t.Fatalf("Run fc builtin failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got, want := stdout.String(), "no-fc\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
 func TestBindParser(t *testing.T) {
 	key, action, err := parseBindArgs([]string{`"\e[A": history-search-backward`})
 	if err != nil {
