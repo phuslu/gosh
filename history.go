@@ -345,7 +345,7 @@ func (h *history) RewriteFile() error {
 }
 
 // WriteFile writes all entries to name (or the configured history file when
-// name is empty), truncating it first.
+// name is empty), replacing its previous contents atomically.
 func (h *history) WriteFile(name string) error {
 	if h == nil {
 		return nil
@@ -357,17 +357,15 @@ func (h *history) WriteFile(name string) error {
 		return fmt.Errorf("history: no history file")
 	}
 	entries := h.Entries()
-	file, err := os.OpenFile(name, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o666)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if _, err := fmt.Fprintln(file, encodeHistoryLine(entry)); err != nil {
-			file.Close()
-			return err
+	err := writeFileAtomic(name, func(w io.Writer) error {
+		for _, entry := range entries {
+			if _, err := fmt.Fprintln(w, encodeHistoryLine(entry)); err != nil {
+				return err
+			}
 		}
-	}
-	if err := file.Close(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	if name == h.cfg.file {
@@ -436,7 +434,60 @@ func truncateHistoryFile(name string, limit int) error {
 	if len(keep) > 0 {
 		out += "\n"
 	}
-	return os.WriteFile(name, []byte(out), 0o666)
+	return writeFileAtomic(name, func(w io.Writer) error {
+		_, err := io.WriteString(w, out)
+		return err
+	})
+}
+
+// writeFileAtomic replaces name with the bytes produced by write. The content
+// is staged in a temporary file in the same directory and then renamed over
+// name, so an interrupted write never leaves a truncated or partial history
+// file behind. The permissions of an existing file are preserved.
+func writeFileAtomic(name string, write func(io.Writer) error) error {
+	perm := fs.FileMode(0)
+	if info, err := os.Stat(name); err == nil {
+		perm = info.Mode().Perm()
+	}
+	dir, base := filepath.Split(name)
+	if dir == "" {
+		dir = "."
+	}
+	tmp, err := os.CreateTemp(dir, base+".tmp*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		if tmpName != "" {
+			os.Remove(tmpName)
+		}
+	}()
+	buf := bufio.NewWriter(tmp)
+	if err := write(buf); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := buf.Flush(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	// CreateTemp always uses 0600; restore the mode of the file being
+	// replaced. A history file created from scratch keeps 0600, which is
+	// what bash uses as well.
+	if perm != 0 {
+		if err := os.Chmod(tmpName, perm); err != nil {
+			return err
+		}
+	}
+	if err := os.Rename(tmpName, name); err != nil {
+		return err
+	}
+	tmpName = ""
+	return nil
 }
 
 const historyEncodedPrefix = "# gosh-history-v1 "

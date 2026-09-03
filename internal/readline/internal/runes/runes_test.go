@@ -60,6 +60,30 @@ func TestRuneWidth(t *testing.T) {
 	}
 }
 
+func TestColorFilter(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"abc", "abc"},
+		{"\033[31mred\033[0m", "red"},
+		// A lone escape at the very end must not read past the slice.
+		{"\033", "\033"},
+		{"prompt\033", "prompt\033"},
+		// An unterminated CSI keeps its existing (escape-dropping) behavior.
+		{"\033[", "["},
+		{"a\033[31", "a[31"},
+		{"\033[31mred\033", "red\033"},
+	}
+	for _, test := range tests {
+		got := string(ColorFilter([]rune(test.in)))
+		if got != test.want {
+			t.Errorf("ColorFilter(%q) = %q, want %q", test.in, got, test.want)
+		}
+	}
+}
+
 type tagg struct {
 	r      [][]rune
 	e      [][]rune

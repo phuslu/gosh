@@ -169,3 +169,72 @@ func TestBuiltinCompoptOutsideCompletion(t *testing.T) {
 		t.Fatal("compopt outside a completion function should fail")
 	}
 }
+
+// TestApplyCompletionOptionsUnrelatedCandidates checks that candidates which
+// do not extend the word under the cursor never splice text into the line.
+// Programmable completion functions are free to return words unrelated to
+// $cur, and bash only lists those instead of inserting them.
+func TestApplyCompletionOptionsUnrelatedCandidates(t *testing.T) {
+	tests := []struct {
+		name    string
+		prefix  string
+		options []string
+		want    [][]rune
+		wantLen int
+		listed  bool
+	}{
+		{
+			name:    "unrelated single candidate",
+			prefix:  "ab",
+			options: []string{"xyzzy"},
+			listed:  true,
+		},
+		{
+			name:    "unrelated candidates",
+			prefix:  "ab",
+			options: []string{"xyzzy", "xyzzz"},
+			listed:  true,
+		},
+		{
+			name:    "common prefix shorter than word",
+			prefix:  "abc",
+			options: []string{"abd", "abe"},
+			listed:  true,
+		},
+		{
+			name:    "candidate extends the word",
+			prefix:  "ab",
+			options: []string{"abcd", "abce"},
+			want:    [][]rune{[]rune("c")},
+			wantLen: 2,
+		},
+		{
+			name:    "single candidate extends the word",
+			prefix:  "ab",
+			options: []string{"abc"},
+			want:    [][]rune{[]rune("c ")},
+			wantLen: 2,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			c := &autoCompleter{
+				ctx:    context.Background(),
+				opts:   newShellOptions(false),
+				stdin:  strings.NewReader(""),
+				stdout: &stdout,
+				stderr: io.Discard,
+			}
+			ctx := completionContext{prefix: test.prefix, isCommand: true, inWord: true}
+			got, gotLen := c.applyCompletionOptions(test.options, ctx, false)
+			if !reflect.DeepEqual(got, test.want) || gotLen != test.wantLen {
+				t.Fatalf("applyCompletionOptions(%q, prefix %q) = %q, %d, want %q, %d",
+					test.options, test.prefix, got, gotLen, test.want, test.wantLen)
+			}
+			if listed := stdout.Len() > 0; listed != test.listed {
+				t.Fatalf("candidates listed = %v, want %v (output %q)", listed, test.listed, stdout.String())
+			}
+		})
+	}
+}

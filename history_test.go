@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -446,4 +447,90 @@ func TestInteractiveHistoryFileResolution(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+}
+
+// TestHistoryFileWritesAreAtomic checks that the two rewriting paths, history
+// -w and HISTFILESIZE truncation, replace the file by renaming a temporary
+// file over it instead of truncating it in place. A killed shell then either
+// keeps the old history file or gets the complete new one, never an empty or
+// half-written one.
+func TestHistoryFileWritesAreAtomic(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "history")
+	if err := os.WriteFile(file, []byte("echo 1\necho 2\necho 3\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	assertReplaced := func(t *testing.T, before os.FileInfo, wantContent string) {
+		t.Helper()
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := string(data); got != wantContent {
+			t.Fatalf("history file = %q, want %q", got, wantContent)
+		}
+		after, err := os.Stat(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if runtime.GOOS != "windows" {
+			if os.SameFile(before, after) {
+				t.Fatal("history file was rewritten in place, want a tmp file renamed over it")
+			}
+			if got, want := after.Mode().Perm(), before.Mode().Perm(); got != want {
+				t.Fatalf("history file mode = %v, want %v", got, want)
+			}
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 || entries[0].Name() != filepath.Base(file) {
+			names := make([]string, len(entries))
+			for i, entry := range entries {
+				names[i] = entry.Name()
+			}
+			t.Fatalf("directory contains %q, want only the history file", names)
+		}
+	}
+
+	before, err := os.Stat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &history{cfg: historyConfig{file: file, inMemoryLimit: -1, fileLimit: 2}}
+	h.append("echo 4")
+	h.append("echo 5")
+	h.append("echo 6")
+	if err := h.RewriteFile(); err != nil {
+		t.Fatalf("RewriteFile failed: %v", err)
+	}
+	assertReplaced(t, before, "echo 4\necho 5\necho 6\n")
+
+	if before, err = os.Stat(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.TruncateFile(); err != nil {
+		t.Fatalf("TruncateFile failed: %v", err)
+	}
+	assertReplaced(t, before, "echo 5\necho 6\n")
+}
+
+// TestHistoryFileWriteCreatesMissingFile keeps the create-on-write behavior of
+// the non-atomic implementation.
+func TestHistoryFileWriteCreatesMissingFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "history")
+	h := &history{cfg: historyConfig{file: file, inMemoryLimit: -1, fileLimit: -1}}
+	h.append("echo hi")
+	if err := h.RewriteFile(); err != nil {
+		t.Fatalf("RewriteFile failed: %v", err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), "echo hi\n"; got != want {
+		t.Fatalf("history file = %q, want %q", got, want)
+	}
 }

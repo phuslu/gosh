@@ -330,16 +330,11 @@ func (r *keyBindingInput) Read(p []byte) (int, error) {
 				r.needMore = r.processBuffer()
 				continue
 			}
-			if err == io.EOF {
-				if len(r.buf) > 0 {
-					r.out = append(r.out, r.buf...)
-					r.buf = nil
-					r.needMore = false
-					continue
-				}
-				if len(r.out) > 0 {
-					break
-				}
+			if err == io.EOF && len(r.buf) > 0 {
+				r.out = append(r.out, r.buf...)
+				r.buf = nil
+				r.needMore = false
+				continue
 			}
 			return 0, err
 		}
@@ -359,16 +354,25 @@ func isReadTimeout(err error) bool {
 	return errors.As(err, &timeout) && timeout.Timeout()
 }
 
+// isReadlineControlAction reports whether action is one of readline's own
+// single-byte control characters, as opposed to a gosh action rune such as
+// keyActionHistorySearchBackward that only exists as a registered handler.
+func isReadlineControlAction(action rune) bool {
+	return action > 0 && action < 0x80
+}
+
 func (r *keyBindingInput) processBuffer() bool {
 	for len(r.buf) > 0 {
 		action, size, needMore := r.mgr.match(r.buf)
 		if size > 0 {
-			if r.mgr.invokeAction(action) {
-				r.buf = r.buf[size:]
-				continue
-			}
-			r.out = append(r.out, byte(action))
+			handled := r.mgr.invokeAction(action)
 			r.buf = r.buf[size:]
+			if !handled && isReadlineControlAction(action) {
+				// Readline understands its own control characters, so hand
+				// the action back to it. Custom handler actions have no byte
+				// representation and would just be garbage in the stream.
+				r.out = append(r.out, byte(action))
+			}
 			continue
 		}
 		if needMore {

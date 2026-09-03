@@ -1310,3 +1310,74 @@ func TestPrintfDashDash(t *testing.T) {
 		t.Fatalf("stderr = %q, want empty", got)
 	}
 }
+
+// TestKeyBindingInputDropsUnhandledCustomActions makes sure a bound sequence
+// whose action handler is missing or declines the key never leaks the action
+// rune itself into readline's input stream. Only readline's own control
+// characters are handed back.
+func TestKeyBindingInputDropsUnhandledCustomActions(t *testing.T) {
+	tests := []struct {
+		name    string
+		bind    string
+		seq     []byte
+		handler func(rune) bool
+		want    []byte
+	}{
+		{
+			name: "custom action without handler",
+			bind: `"\e[A": history-search-backward`,
+			seq:  []byte{0x1b, '[', 'A'},
+			want: nil,
+		},
+		{
+			name:    "custom action declined by handler",
+			bind:    `"\e[B": history-search-forward`,
+			seq:     []byte{0x1b, '[', 'B'},
+			handler: func(rune) bool { return false },
+			want:    nil,
+		},
+		{
+			name:    "custom action handled",
+			bind:    `"\e[A": history-search-backward`,
+			seq:     []byte{0x1b, '[', 'A'},
+			handler: func(rune) bool { return true },
+			want:    nil,
+		},
+		{
+			name: "readline control action falls back to its byte",
+			bind: `"\C-x": beginning-of-line`,
+			seq:  []byte{0x18},
+			want: []byte{byte(readline.CharLineStart)},
+		},
+		{
+			name: "unbound bytes pass through",
+			bind: `"\e[A": history-search-backward`,
+			seq:  []byte("abc"),
+			want: []byte("abc"),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := &keyBindingManager{entries: make(map[string]*goKeyBindingEntry)}
+			if err := m.handleBind([]string{test.bind}, io.Discard); err != nil {
+				t.Fatalf("handleBind failed: %v", err)
+			}
+			if test.handler != nil {
+				for action := range bindActionNames {
+					m.registerActionHandler(action, test.handler)
+				}
+			}
+			in := &keyBindingInput{src: bytes.NewReader(test.seq), mgr: m}
+			got, err := io.ReadAll(in)
+			if err != nil {
+				t.Fatalf("read failed: %v", err)
+			}
+			if len(got) == 0 {
+				got = nil
+			}
+			if !bytes.Equal(got, test.want) {
+				t.Fatalf("input = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}

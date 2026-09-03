@@ -158,9 +158,18 @@ func (c *autoCompleter) applyCompletionOptions(options []string, ctx completionC
 	if len(options) == 0 {
 		return nil, 0
 	}
-	prefixLen := utf8.RuneCountInString(ctx.prefix)
+	prefixRunes := []rune(ctx.prefix)
+	prefixLen := len(prefixRunes)
 	common := longestCommonPrefix(options)
 	commonRunes := []rune(common)
+	if !runesHavePrefix(commonRunes, prefixRunes) {
+		// The candidates do not extend what is already on the line, which
+		// programmable completion is free to do. Inserting the tail of the
+		// common prefix here would splice unrelated text into the word, so
+		// only show the matches.
+		c.printMatches(options)
+		return nil, 0
+	}
 	addition := []rune{}
 	if len(commonRunes) > prefixLen {
 		addition = append(addition, []rune(escapeCompletionForContext(string(commonRunes[prefixLen:]), ctx.quote))...)
@@ -820,6 +829,19 @@ func sharedPrefix(a, b string) string {
 		i++
 	}
 	return string(ar[:i])
+}
+
+// runesHavePrefix reports whether r starts with prefix.
+func runesHavePrefix(r, prefix []rune) bool {
+	if len(r) < len(prefix) {
+		return false
+	}
+	for i, c := range prefix {
+		if r[i] != c {
+			return false
+		}
+	}
+	return true
 }
 
 func longestCommonPrefix(values []string) string {

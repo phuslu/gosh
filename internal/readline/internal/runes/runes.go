@@ -114,7 +114,7 @@ func Index(r rune, rs []rune) int {
 func ColorFilter(r []rune) []rune {
 	newr := make([]rune, 0, len(r))
 	for pos := 0; pos < len(r); pos++ {
-		if r[pos] == '\033' && r[pos+1] == '[' {
+		if r[pos] == '\033' && pos+1 < len(r) && r[pos+1] == '[' {
 			idx := Index('m', r[pos+2:])
 			if idx == -1 {
 				continue
