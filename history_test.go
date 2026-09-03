@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -217,58 +218,147 @@ func TestHistoryHistappendAppend(t *testing.T) {
 	}
 }
 
+// historyEntryCase is a multi-line command plus the entries gosh's
+// formatHistoryEntries merges it into with cmdhist on and lithist off.
+//
+// Every golden below has been checked against GNU bash 5.3: the same lines
+// are typed into `bash --noprofile --norc -i` and the entries its history
+// builtin prints are compared with the golden (see
+// TestFormatHistoryEntriesMatchBash). bashSkip marks the few cases where
+// that comparison is not possible or where bash is known to disagree, and
+// its text says what bash actually does.
+type historyEntryCase struct {
+	name     string
+	lines    []string
+	want     []string
+	bashSkip string
+}
+
+var historyEntryCases = []historyEntryCase{
+	{name: "single", lines: []string{"echo one"}, want: []string{"echo one"}},
+	{name: "if", lines: []string{"if true; then", "echo hi", "fi"}, want: []string{"if true; then echo hi; fi"}},
+	{name: "pipeline", lines: []string{"echo a |", "cat"}, want: []string{"echo a | cat"}},
+	{name: "pipeline trailing space", lines: []string{"echo a | ", "cat"}, want: []string{"echo a |  cat"}},
+	{name: "for", lines: []string{"for x in 1; do", "echo x", "done"}, want: []string{"for x in 1; do echo x; done"}},
+	{name: "for in", lines: []string{"for i", "in a b; do", "echo $i", "done"}, want: []string{"for i in a b; do echo $i; done"}},
+	{name: "for do", lines: []string{"for x", "do", "echo x", "done"}, want: []string{"for x;do echo x; done"}},
+	{name: "for in no do", lines: []string{"for x in", "a b"}, want: []string{"for x in a b"}},
+	{name: "brace", lines: []string{"{", "echo a", "echo b", "}"}, want: []string{"{ echo a; echo b; }"}},
+	{name: "brace blank", lines: []string{"{", "", "echo a", "}"}, want: []string{"{ echo a; }"}},
+	{name: "brace blank after word", lines: []string{"{ echo a", "", "}"}, want: []string{"{ echo a;  }"}},
+	{name: "while", lines: []string{"while true; do", "echo x", "break", "done"}, want: []string{"while true; do echo x; break; done"}},
+	{name: "if elif else", lines: []string{"if true; then", "echo a", "elif false; then", "echo b", "else", "echo c", "fi"},
+		want: []string{"if true; then echo a; elif false; then echo b; else echo c; fi"}},
+	{name: "case", lines: []string{"case $x in a)", "echo x;", ";;", "esac"}, want: []string{"case $x in a) echo x; ;; esac"}},
+	{name: "case comment", lines: []string{"case x in", "a) echo a", "# c", ";;", "esac"}, want: []string{"case x in a) echo a\n;; esac"}},
+	{name: "function braces", lines: []string{"f() {", "echo hi", "}"}, want: []string{"f() { echo hi; }"}},
+	{name: "function name", lines: []string{"function f", "echo hi"}, want: []string{"function f echo hi"}},
+	{name: "subshell", lines: []string{"(echo a", "echo b)"}, want: []string{"(echo a; echo b)"}},
+	{name: "compound assignment", lines: []string{"arr=(", "one two", "three", ")"}, want: []string{"arr=( one two three )"}},
+	// bash merges these lines the same way even though its parser rejects
+	// the resulting arithmetic header; gosh's interactive reader does not
+	// continue the command at all (see
+	// TestDifferentialHistoryCmdhistKnownDivergences).
+	{name: "arithmetic for", lines: []string{"for ((i=0", "i<2; i++)); do", "echo i", "done"}, want: []string{"for ((i=0; i<2; i++)); do echo i; done"}},
+	{name: "select", lines: []string{"select x in a b; do", "echo x", "done"}, want: []string{"select x in a b; do echo x; done"},
+		bashSkip: "select reads its answer from the same pipe that feeds the shell, so the rest of the script is swallowed"},
+	{name: "backslash continuation", lines: []string{"echo a \\", "echo b"}, want: []string{"echo a echo b"}},
+	{name: "single quote", lines: []string{"echo 'a", "b'"}, want: []string{"echo 'a\nb'"}},
+	{name: "double quote", lines: []string{"echo \"c", "d\""}, want: []string{"echo \"c\nd\""}},
+	{name: "blank inside quotes", lines: []string{"echo \"a", "", "b\""}, want: []string{"echo \"a\n\nb\""}},
+	{name: "dollar paren", lines: []string{"x=$(echo a", "echo b)"}, want: []string{"x=$(echo a\necho b)"}},
+	// As with "arithmetic for", the golden matches bash but gosh's
+	// interactive reader does not ask for the continuation line.
+	{name: "dollar brace", lines: []string{"x=${a", "b}"}, want: []string{"x=${a; b}"}},
+	{name: "arithmetic expansion", lines: []string{"echo $((1 +", "2))"}, want: []string{"echo $((1 +\n2))"}},
+	{name: "and", lines: []string{"echo a &&", "echo b"}, want: []string{"echo a && echo b"}},
+	{name: "or", lines: []string{"echo a ||", "echo b"}, want: []string{"echo a || echo b"}},
+	{name: "pipe amp quirk", lines: []string{"echo a |&", "cat"}, want: []string{"echo a |&; cat"}},
+	{name: "comment dropped", lines: []string{"if true; then", "# comment", "echo hi", "fi"}, want: []string{"if true; then\necho hi; fi"}},
+	{name: "two comments", lines: []string{"if true; then", "# c1", "# c2", "echo hi", "fi"}, want: []string{"if true; then\necho hi; fi"}},
+	{name: "trailing comment", lines: []string{"if true; then", "echo a # trailing", "fi"}, want: []string{"if true; then echo a # trailing\nfi"}},
+	{name: "first line trailing comment", lines: []string{"if true; then # c", "echo hi", "fi"}, want: []string{"if true; then # c\necho hi; fi"}},
+	// The trailing newline is deliberate: bash keeps it, so its history
+	// listing shows an empty line after the delimiter.
+	{name: "heredoc", lines: []string{"cat <<EOF", "line1", "line2", "EOF"}, want: []string{"cat <<EOF\nline1\nline2\nEOF\n"}},
+	{name: "heredoc in compound", lines: []string{"{ cat <<EOF", "x", "EOF", "echo done", "}"}, want: []string{"{ cat <<EOF\nx\nEOF\n echo done; }"}},
+	{name: "heredoc tab", lines: []string{"cat <<-EOF", "\tline1", "\tEOF"}, want: []string{"cat <<-EOF\n\tline1\n\tEOF\n"},
+		bashSkip: "a literal tab triggers completion in readline before it reaches the parser, so bash never sees this input over a pipe"},
+	// Divergence: bash treats `[[ a` as a syntax error rather than an
+	// incomplete command and records two entries, "[[ a" and "&& b ]]",
+	// while gosh merges them.
+	{name: "cond command", lines: []string{"[[ a", "&& b ]]"}, want: []string{"[[ a\n&& b ]]"},
+		bashSkip: `bash does not continue an invalid conditional command; it records "[[ a" and "&& b ]]" separately`},
+}
+
 func TestFormatHistoryEntries(t *testing.T) {
-	cases := []struct {
-		name  string
-		lines []string
-		want  []string
-	}{
-		{"single", []string{"echo one"}, []string{"echo one"}},
-		{"if", []string{"if true; then", "echo hi", "fi"}, []string{"if true; then echo hi; fi"}},
-		{"pipeline", []string{"echo a |", "cat"}, []string{"echo a | cat"}},
-		{"pipeline trailing space", []string{"echo a | ", "cat"}, []string{"echo a |  cat"}},
-		{"for", []string{"for x in 1; do", "echo x", "done"}, []string{"for x in 1; do echo x; done"}},
-		{"for in", []string{"for i", "in a b; do", "echo $i", "done"}, []string{"for i in a b; do echo $i; done"}},
-		{"for do", []string{"for x", "do", "echo x", "done"}, []string{"for x;do echo x; done"}},
-		{"for in no do", []string{"for x in", "a b"}, []string{"for x in a b"}},
-		{"brace", []string{"{", "echo a", "echo b", "}"}, []string{"{ echo a; echo b; }"}},
-		{"brace blank", []string{"{", "", "echo a", "}"}, []string{"{ echo a; }"}},
-		{"brace blank after word", []string{"{ echo a", "", "}"}, []string{"{ echo a;  }"}},
-		{"while", []string{"while true; do", "echo x", "break", "done"}, []string{"while true; do echo x; break; done"}},
-		{"if elif else", []string{"if true; then", "echo a", "elif false; then", "echo b", "else", "echo c", "fi"},
-			[]string{"if true; then echo a; elif false; then echo b; else echo c; fi"}},
-		{"case", []string{"case $x in a)", "echo x;", ";;", "esac"}, []string{"case $x in a) echo x; ;; esac"}},
-		{"case comment", []string{"case x in", "a) echo a", "# c", ";;", "esac"}, []string{"case x in a) echo a\n;; esac"}},
-		{"function braces", []string{"f() {", "echo hi", "}"}, []string{"f() { echo hi; }"}},
-		{"function name", []string{"function f", "echo hi"}, []string{"function f echo hi"}},
-		{"subshell", []string{"(echo a", "echo b)"}, []string{"(echo a; echo b)"}},
-		{"compound assignment", []string{"arr=(", "one two", "three", ")"}, []string{"arr=( one two three )"}},
-		{"arithmetic for", []string{"for ((i=0", "i<2; i++)); do", "echo i", "done"}, []string{"for ((i=0; i<2; i++)); do echo i; done"}},
-		{"select", []string{"select x in a b; do", "echo x", "done"}, []string{"select x in a b; do echo x; done"}},
-		{"backslash continuation", []string{"echo a \\", "echo b"}, []string{"echo a echo b"}},
-		{"single quote", []string{"echo 'a", "b'"}, []string{"echo 'a\nb'"}},
-		{"double quote", []string{"echo \"c", "d\""}, []string{"echo \"c\nd\""}},
-		{"blank inside quotes", []string{"echo \"a", "", "b\""}, []string{"echo \"a\n\nb\""}},
-		{"dollar paren", []string{"x=$(echo a", "echo b)"}, []string{"x=$(echo a\necho b)"}},
-		{"dollar brace", []string{"x=${a", "b}"}, []string{"x=${a; b}"}},
-		{"arithmetic expansion", []string{"echo $((1 +", "2))"}, []string{"echo $((1 +\n2))"}},
-		{"and", []string{"echo a &&", "echo b"}, []string{"echo a && echo b"}},
-		{"or", []string{"echo a ||", "echo b"}, []string{"echo a || echo b"}},
-		{"pipe amp quirk", []string{"echo a |&", "cat"}, []string{"echo a |&; cat"}},
-		{"comment dropped", []string{"if true; then", "# comment", "echo hi", "fi"}, []string{"if true; then\necho hi; fi"}},
-		{"two comments", []string{"if true; then", "# c1", "# c2", "echo hi", "fi"}, []string{"if true; then\necho hi; fi"}},
-		{"trailing comment", []string{"if true; then", "echo a # trailing", "fi"}, []string{"if true; then echo a # trailing\nfi"}},
-		{"first line trailing comment", []string{"if true; then # c", "echo hi", "fi"}, []string{"if true; then # c\necho hi; fi"}},
-		{"heredoc", []string{"cat <<EOF", "line1", "line2", "EOF"}, []string{"cat <<EOF\nline1\nline2\nEOF\n"}},
-		{"heredoc in compound", []string{"{ cat <<EOF", "x", "EOF", "echo done", "}"}, []string{"{ cat <<EOF\nx\nEOF\n echo done; }"}},
-		{"heredoc tab", []string{"cat <<-EOF", "\tline1", "\tEOF"}, []string{"cat <<-EOF\n\tline1\n\tEOF\n"}},
-		{"cond command", []string{"[[ a", "&& b ]]"}, []string{"[[ a\n&& b ]]"}},
-	}
-	for _, tc := range cases {
+	for _, tc := range historyEntryCases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := formatHistoryEntries(tc.lines, true, false)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("formatHistoryEntries(%#v) = %#v, want %#v", tc.lines, got, tc.want)
+			}
+		})
+	}
+}
+
+// historyListingEntry matches the "%5d  " prefix the history builtin prints
+// in front of each entry; everything else is a continuation line.
+var historyListingEntry = regexp.MustCompile(`^ *[0-9]+  `)
+
+// parseHistoryListing splits the output of the history builtin back into
+// entries, re-joining the continuation lines of multi-line entries.
+func parseHistoryListing(t *testing.T, listing string) []string {
+	t.Helper()
+	var entries []string
+	for _, line := range strings.Split(strings.TrimSuffix(listing, "\n"), "\n") {
+		if loc := historyListingEntry.FindStringIndex(line); loc != nil {
+			entries = append(entries, line[loc[1]:])
+			continue
+		}
+		if len(entries) == 0 {
+			t.Fatalf("history listing starts with a continuation line: %q", listing)
+		}
+		entries[len(entries)-1] += "\n" + line
+	}
+	return entries
+}
+
+// bashHistoryEntries types lines into an interactive bash and returns the
+// history entries bash merged them into, as its history builtin prints them.
+func bashHistoryEntries(t *testing.T, lines []string) []string {
+	t.Helper()
+	const marker = "gosh-history-marker"
+	// The marker separates the output of the commands themselves from the
+	// history listing; the marker echo and the history call are the last two
+	// entries and are dropped again.
+	script := append(append([]string{}, lines...), "echo "+marker, "history", "exit")
+	file := filepath.Join(t.TempDir(), "bash-history")
+	res := runInteractiveHistory(t, "bash", "", []string{"--noprofile", "--norc", "-i"}, script, historyEnv(t, file))
+	_, listing, ok := strings.Cut(res.stdout, marker+"\n")
+	if !ok {
+		t.Fatalf("bash did not echo the marker\nstdout: %q\nstderr: %q", res.stdout, res.stderr)
+	}
+	entries := parseHistoryListing(t, listing)
+	if len(entries) < 2 {
+		t.Fatalf("bash printed %d history entries, want at least 2\nlisting: %q", len(entries), listing)
+	}
+	return entries[:len(entries)-2]
+}
+
+// TestFormatHistoryEntriesMatchBash validates the goldens above against a
+// real bash instead of against gosh's own implementation, so the refactor of
+// history_format.go has an external reference to keep matching.
+func TestFormatHistoryEntriesMatchBash(t *testing.T) {
+	requireBash(t)
+	for _, tc := range historyEntryCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.bashSkip != "" {
+				t.Skipf("not compared against bash: %s", tc.bashSkip)
+			}
+			want := bashHistoryEntries(t, tc.lines)
+			if !reflect.DeepEqual(tc.want, want) {
+				t.Fatalf("golden entries for %#v are %#v, but bash records %#v", tc.lines, tc.want, want)
 			}
 		})
 	}
