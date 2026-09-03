@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/phuslu/gosh/internal/readline"
@@ -214,98 +213,6 @@ func (c *autoCompleter) completionContext(line []rune, pos int) completionContex
 		pos = len(line)
 	}
 	return parseCompletionContext(line[:pos])
-}
-
-// scanCompletionContext is the legacy hand-written completion scanner. It is
-// no longer used by completion itself: parseCompletionContext derives the
-// same context from the mvdan parser/AST. It is kept solely as the reference
-// implementation for the differential tests in completion_parse_test.go.
-func scanCompletionContext(line []rune) completionContext {
-	var words []string
-	var current []rune
-	inWord := false
-	quote := rune(0)
-	escaped := false
-	lastCompleted := ""
-	resetCommand := func() {
-		words = words[:0]
-		lastCompleted = ""
-	}
-	finishWord := func() {
-		if !inWord {
-			return
-		}
-		word := string(current)
-		words = append(words, word)
-		lastCompleted = word
-		current = current[:0]
-		inWord = false
-	}
-	startWord := func() {
-		if !inWord {
-			inWord = true
-			current = current[:0]
-		}
-	}
-
-	for _, r := range line {
-		if escaped {
-			startWord()
-			current = append(current, r)
-			escaped = false
-			continue
-		}
-		if quote == 0 && r == '\\' {
-			startWord()
-			escaped = true
-			continue
-		}
-		if quote == '"' && r == '\\' {
-			startWord()
-			escaped = true
-			continue
-		}
-		if quote != 0 {
-			if r == quote {
-				quote = 0
-				startWord()
-				continue
-			}
-			startWord()
-			current = append(current, r)
-			continue
-		}
-		switch {
-		case r == '\'' || r == '"':
-			startWord()
-			quote = r
-		case unicode.IsSpace(r):
-			finishWord()
-		case isCommandSeparator(r):
-			finishWord()
-			resetCommand()
-		default:
-			startWord()
-			current = append(current, r)
-		}
-	}
-
-	prefix := ""
-	if inWord {
-		prefix = string(current)
-	}
-	isCommand := len(words) == 0
-	if inWord {
-		isCommand = len(words) == 0 || keywordStartsCommand(lastCompleted)
-	} else if lastCompleted != "" && keywordStartsCommand(lastCompleted) {
-		isCommand = true
-	}
-	command := ""
-	if len(words) > 0 {
-		command = words[0]
-	}
-	cword := len(words)
-	return completionContext{prefix: prefix, isCommand: isCommand, command: command, quote: quote, words: words, cword: cword, inWord: inWord}
 }
 
 func (c *autoCompleter) commandCandidates(prefix string) []string {
@@ -750,51 +657,6 @@ func hasTrailingPathSeparator(val string) bool {
 		return false
 	}
 	return strings.HasSuffix(val, "/") || strings.HasSuffix(val, "\\")
-}
-
-func isCompletionBreak(r rune) bool {
-	if unicode.IsSpace(r) {
-		return true
-	}
-	switch r {
-	case ';', '|', '&', '(', ')', '{', '}', '!':
-		return true
-	}
-	return false
-}
-
-func isCommandSeparator(r rune) bool {
-	switch r {
-	case '|', '&', ';', '(', ')', '{', '}', '!':
-		return true
-	}
-	return false
-}
-
-func keywordStartsCommand(word string) bool {
-	word = strings.TrimSpace(word)
-	if word == "" {
-		return false
-	}
-	for _, kw := range []string{
-		"if",
-		"then",
-		"else",
-		"elif",
-		"do",
-		"done",
-		"while",
-		"until",
-		"time",
-		"coproc",
-		"fi",
-		"esac",
-	} {
-		if word == kw {
-			return true
-		}
-	}
-	return false
 }
 
 func expandTilde(path, home string) (string, bool) {

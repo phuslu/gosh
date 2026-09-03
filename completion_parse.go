@@ -20,8 +20,8 @@ const completionSentinel = "gosh-completion-sentinel"
 const maxCompletionRepairs = 8
 
 // parseCompletionContext derives a completionContext from the text before the
-// cursor using mvdan.cc/sh's parser and AST instead of the hand-written
-// scanner. line must already be truncated to the cursor position.
+// cursor using mvdan.cc/sh's parser and AST. line must already be truncated to
+// the cursor position.
 func parseCompletionContext(line []rune) completionContext {
 	src := trimCompletionTrailingBackslash(string(line))
 	cursor := len(src)

@@ -226,21 +226,16 @@ func (s *Shell) initialize() error {
 	s.runner = runner
 	installShellOptionVariable(runner, s.version)
 
-	prog, err := s.parser.Parse(strings.NewReader(`
-		bind '"\e[1~": beginning-of-line'
-		bind '"\e[4~": end-of-line'
-		bind '"\e[5~": previous-screen'
-		bind '"\e[6~": next-screen'
-		bind '"\e[F": end-of-line'
-		bind '"\e[H": beginning-of-line'
-		bind '"\eOF": end-of-line'
-		bind '"\eOH": beginning-of-line'
-	`), "")
-	if err != nil {
-		return err
-	}
-	if err := runner.Run(s.baseCtx, prog); err != nil {
-		return err
+	// Default key bindings. Home/End in their various encodings (\e[1~, \e[4~,
+	// \e[H, \e[F, \eOH, \eOF) are already decoded by the readline terminal, so
+	// only PageUp/PageDown need a binding here.
+	for _, binding := range []string{
+		`"\e[5~": previous-screen`,
+		`"\e[6~": next-screen`,
+	} {
+		if err := s.bindings.handleBind([]string{binding}, io.Discard); err != nil {
+			return err
+		}
 	}
 
 	// Source the interactive init file.

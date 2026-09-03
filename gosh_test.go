@@ -449,6 +449,35 @@ func TestRunFcBuiltin(t *testing.T) {
 	}
 }
 
+// TestDefaultBindings pins down the default key bindings a new shell installs.
+// Home and End in their various encodings are decoded natively by the readline
+// terminal (see TestEscapeHomeEndMapping), so they are deliberately not bound
+// here and must pass through the binding filter untouched.
+func TestDefaultBindings(t *testing.T) {
+	shell, err := New(Config{Env: testEnv(t)})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	var out bytes.Buffer
+	if err := shell.bindings.handleBind(nil, &out); err != nil {
+		t.Fatalf("handleBind failed: %v", err)
+	}
+	want := `"\e[5~": previous-screen` + "\n" + `"\e[6~": next-screen` + "\n"
+	if got := out.String(); got != want {
+		t.Fatalf("default bindings = %q, want %q", got, want)
+	}
+	for _, seq := range []string{"\x1b[1~", "\x1b[4~", "\x1b[H", "\x1b[F", "\x1bOH", "\x1bOF"} {
+		in := &keyBindingInput{src: bytes.NewReader([]byte(seq)), mgr: shell.bindings}
+		got, err := io.ReadAll(in)
+		if err != nil {
+			t.Fatalf("read %q failed: %v", seq, err)
+		}
+		if string(got) != seq {
+			t.Fatalf("binding filter rewrote %q to %q", seq, got)
+		}
+	}
+}
+
 func TestBindParser(t *testing.T) {
 	key, action, err := parseBindArgs([]string{`"\e[A": history-search-backward`})
 	if err != nil {

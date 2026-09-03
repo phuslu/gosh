@@ -55,6 +55,33 @@ func TestSetBufferWithCursor(t *testing.T) {
 	}
 }
 
+// TestEscapeHomeEndMapping asserts that every Home/End encoding is decoded by
+// the terminal itself, so no explicit key binding is needed for them.
+func TestEscapeHomeEndMapping(t *testing.T) {
+	for seq, want := range map[string]rune{
+		"\x1b[1~": CharLineStart,
+		"\x1b[7~": CharLineStart,
+		"\x1b[H":  CharLineStart,
+		"\x1bOH":  CharLineStart,
+		"\x1b[4~": CharLineEnd,
+		"\x1b[8~": CharLineEnd,
+		"\x1b[F":  CharLineEnd,
+		"\x1bOF":  CharLineEnd,
+	} {
+		buf := bufio.NewReader(strings.NewReader(seq))
+		if r, _, err := buf.ReadRune(); err != nil || r != '\x1b' {
+			t.Fatalf("could not consume ESC for %q: %v", seq, err)
+		}
+		result, err := (&terminal{}).consumeANSIEscape(buf, &bytes.Buffer{})
+		if err != nil {
+			t.Fatalf("consumeANSIEscape(%q) failed: %v", seq, err)
+		}
+		if !result.ok || result.r != want {
+			t.Fatalf("consumeANSIEscape(%q) = %#v, want %q", seq, result, want)
+		}
+	}
+}
+
 func TestEscapeBackspaceAndCtrlModifierMapping(t *testing.T) {
 	for _, seq := range []string{"\x1b\x08", "\x1b\x7f"} {
 		buf := bufio.NewReader(strings.NewReader(seq))

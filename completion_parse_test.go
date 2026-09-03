@@ -10,8 +10,7 @@ import (
 // TestParseCompletionContextGolden pins down the parser-derived context for
 // the inputs listed in the migration plan: simple commands, quotes, command
 // substitution, arithmetic, if/for/case, assignments, and here-document
-// boundaries. Parser-correct behavior intentionally differs from the legacy
-// scanner in several of these cases.
+// boundaries.
 func TestParseCompletionContextGolden(t *testing.T) {
 	tests := []struct {
 		in   string
@@ -152,112 +151,89 @@ func TestParseCompletionContextGolden(t *testing.T) {
 	}
 }
 
-// TestCompletionContextLegacyDifferential asserts that the parser-derived
-// context agrees exactly with the legacy scanner on the inputs where the
-// scanner was already correct. Divergent (parser-correct) cases are pinned in
-// TestParseCompletionContextGolden instead.
-func TestCompletionContextLegacyDifferential(t *testing.T) {
-	agree := []string{
-		"",
-		"cmd ",
-		"cmd arg",
-		"cd ~/Do",
-		`git commit -m "`,
-		`cd '~/Do`,
-		`cmd "foo bar `,
-		"echo a |",
-		"echo a && ",
-		"echo a; ",
-		"echo a & ",
-		"echo $(foo ",
-		"echo $( ",
-		"case $x in foo) ",
-		"[ foo ",
-		"[ $x = f",
-		`cd ~/Do\ F`,
-		`cd ~/Do\`,
-		"echo a; ( ",
-		"( echo hi ",
-		"{ echo hi; ",
-		"echo <(foo ",
-	}
-	normalize := func(c completionContext) completionContext {
-		if len(c.words) == 0 {
-			c.words = nil
-		}
-		return c
-	}
-	for _, in := range agree {
-		legacy := normalize(scanCompletionContext([]rune(in)))
-		parsed := normalize(parseCompletionContext([]rune(in)))
-		if !reflect.DeepEqual(legacy, parsed) {
-			t.Errorf("%q: legacy=%#v parsed=%#v", in, legacy, parsed)
-		}
-	}
-}
-
-// TestCompletionContextLegacyDivergence documents cases where the parser is
-// intentionally more correct than the scanner. This is the corpus the
-// differential fuzzing surfaced during the migration.
-func TestCompletionContextLegacyDivergence(t *testing.T) {
+// TestParseCompletionContextQuotingAndGrouping pins down word splitting inside
+// quotes, test brackets, subshells, brace groups, and process substitution.
+func TestParseCompletionContextQuotingAndGrouping(t *testing.T) {
 	tests := []struct {
-		in     string
-		legacy completionContext
-		parsed completionContext
+		in   string
+		want completionContext
 	}{
 		{
-			in:     "if foo; then bar ",
-			legacy: completionContext{command: "then", words: []string{"then", "bar"}, cword: 2},
-			parsed: completionContext{command: "bar", words: []string{"bar"}, cword: 1},
+			in:   `cmd "foo bar `,
+			want: completionContext{prefix: "foo bar ", command: "cmd", quote: '"', words: []string{"cmd"}, cword: 1, inWord: true},
 		},
 		{
-			in:     "FOO=1 bar ",
-			legacy: completionContext{command: "FOO=1", words: []string{"FOO=1", "bar"}, cword: 2},
-			parsed: completionContext{command: "bar", words: []string{"FOO=1", "bar"}, cword: 2},
+			in:   "echo a & ",
+			want: completionContext{isCommand: true},
 		},
 		{
-			in:     "FOO=1 ",
-			legacy: completionContext{command: "FOO=1", words: []string{"FOO=1"}, cword: 1},
-			parsed: completionContext{isCommand: true, words: []string{"FOO=1"}, cword: 1},
+			in:   "[ $x = f",
+			want: completionContext{prefix: "f", command: "[", words: []string{"[", "$x", "="}, cword: 3, inWord: true},
 		},
 		{
-			in:     "cat <<EOF",
-			legacy: completionContext{prefix: "<<EOF", command: "cat", words: []string{"cat"}, cword: 1, inWord: true},
-			parsed: completionContext{},
+			in:   "echo a; ( ",
+			want: completionContext{isCommand: true},
 		},
 		{
-			in:     "echo a > ",
-			legacy: completionContext{command: "echo", words: []string{"echo", "a", ">"}, cword: 3},
-			parsed: completionContext{command: "echo", words: []string{"echo", "a"}, cword: 2},
+			in:   "( echo hi ",
+			want: completionContext{command: "echo", words: []string{"echo", "hi"}, cword: 2},
 		},
 		{
-			in:     "echo a 2> ",
-			legacy: completionContext{command: "echo", words: []string{"echo", "a", "2>"}, cword: 3},
-			parsed: completionContext{command: "echo", words: []string{"echo", "a"}, cword: 2},
+			in:   "{ echo hi; ",
+			want: completionContext{isCommand: true},
 		},
 		{
-			in:     "echo @(foo ",
-			legacy: completionContext{command: "foo", words: []string{"foo"}, cword: 1},
-			parsed: completionContext{},
-		},
-		{
-			in:     `echo "$(foo `,
-			legacy: completionContext{prefix: "$(foo ", quote: '"', command: "echo", words: []string{"echo"}, cword: 1, inWord: true},
-			parsed: completionContext{command: "foo", words: []string{"foo"}, cword: 1},
-		},
-		{
-			in:     `echo "$( `,
-			legacy: completionContext{prefix: "$( ", quote: '"', command: "echo", words: []string{"echo"}, cword: 1, inWord: true},
-			parsed: completionContext{isCommand: true},
+			in:   "echo <(foo ",
+			want: completionContext{command: "foo", words: []string{"foo"}, cword: 1},
 		},
 	}
 	for _, tt := range tests {
-		if got := scanCompletionContext([]rune(tt.in)); !reflect.DeepEqual(got, tt.legacy) {
-			t.Errorf("legacy(%q) = %#v, want %#v", tt.in, got, tt.legacy)
-		}
-		if got := parseCompletionContext([]rune(tt.in)); !reflect.DeepEqual(got, tt.parsed) {
-			t.Errorf("parsed(%q) = %#v, want %#v", tt.in, got, tt.parsed)
-		}
+		t.Run(tt.in, func(t *testing.T) {
+			got := parseCompletionContext([]rune(tt.in))
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("parseCompletionContext(%q) = %#v, want %#v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestParseCompletionContextRedirectsAndSubstitutions pins down the cases the
+// parser handles more correctly than a plain lexical scan would: redirection
+// operators are not words, extended globs are not commands, and a command
+// substitution inside double quotes still opens a fresh command context.
+func TestParseCompletionContextRedirectsAndSubstitutions(t *testing.T) {
+	tests := []struct {
+		in   string
+		want completionContext
+	}{
+		{
+			in:   "echo a > ",
+			want: completionContext{command: "echo", words: []string{"echo", "a"}, cword: 2},
+		},
+		{
+			in:   "echo a 2> ",
+			want: completionContext{command: "echo", words: []string{"echo", "a"}, cword: 2},
+		},
+		{
+			in:   "echo @(foo ",
+			want: completionContext{},
+		},
+		{
+			in:   `echo "$(foo `,
+			want: completionContext{command: "foo", words: []string{"foo"}, cword: 1},
+		},
+		{
+			in:   `echo "$( `,
+			want: completionContext{isCommand: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			got := parseCompletionContext([]rune(tt.in))
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("parseCompletionContext(%q) = %#v, want %#v", tt.in, got, tt.want)
+			}
+		})
 	}
 }
 
