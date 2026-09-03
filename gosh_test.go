@@ -733,9 +733,10 @@ func TestPromptRenderer(t *testing.T) {
 }
 
 func TestPromptHistoryNumberEscape(t *testing.T) {
-	state := &promptState{history: &history{cfg: historyConfig{inMemoryLimit: 10}}, seq: 9}
-	state.history.append("one")
-	state.history.append("two")
+	hist := &history{cfg: historyConfig{inMemoryLimit: 10}}
+	state := &promptState{env: &promptEnv{history: hist}, seq: 9}
+	hist.append("one")
+	hist.append("two")
 
 	got := (&promptRenderer{src: `\! \#`, state: state}).render()
 	if want := "3 9"; got != want {
@@ -774,10 +775,12 @@ func TestPromptCommandSubstitutionKeepsOutputOnExitStatus(t *testing.T) {
 	}
 
 	state := &promptState{
-		ctx:       ctx,
-		runner:    runner,
-		stdin:     strings.NewReader(""),
-		stderr:    &stderr,
+		ctx: ctx,
+		env: &promptEnv{
+			runner: runner,
+			stdin:  strings.NewReader(""),
+			stderr: &stderr,
+		},
 		vars:      map[string]string{"USER": "alice", "HOME": "/home/alice"},
 		dir:       "/home/alice/project",
 		host:      "host.example",
@@ -806,13 +809,15 @@ func TestPromptvarsDisabled(t *testing.T) {
 	opts := newShellOptions(true)
 
 	state := &promptState{
-		ctx:    ctx,
-		runner: runner,
-		opts:   opts,
-		stdin:  strings.NewReader(""),
-		stderr: &stderr,
-		vars:   map[string]string{"HOME": "/home/alice"},
-		dir:    "/home/alice/project",
+		ctx: ctx,
+		env: &promptEnv{
+			runner: runner,
+			opts:   opts,
+			stdin:  strings.NewReader(""),
+			stderr: &stderr,
+		},
+		vars: map[string]string{"HOME": "/home/alice"},
+		dir:  "/home/alice/project",
 	}
 	src := `\w $HOME`
 

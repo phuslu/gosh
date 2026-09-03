@@ -49,7 +49,27 @@ func shortVersion(version string) string {
 	return version
 }
 
-func promptString(ctx context.Context, runner *interp.Runner, opts *shellOptions, history *history, stdin io.Reader, stderr io.Writer, host, homeFallback, userFallback, name, fallback string, seq int, cache *promptCache) promptParts {
+// promptEnv holds everything prompt rendering needs for the lifetime of an
+// interactive session: the interpreter to read variables from and to run
+// command substitutions in, the option state gating promptvars, the history
+// behind \!, the host name behind \h and \H, the fallbacks for \u and \w,
+// and the parsed-template cache. The interactive loop builds one and renders
+// every prompt through it.
+type promptEnv struct {
+	runner       *interp.Runner
+	opts         *shellOptions
+	history      *history
+	stdin        io.Reader
+	stderr       io.Writer
+	host         string
+	shortHost    string
+	homeFallback string
+	userFallback string
+	cache        *promptCache
+}
+
+func (s *Shell) newPromptEnv() *promptEnv {
+	host := s.hostname
 	if host == "" {
 		host = "localhost"
 	}
@@ -57,26 +77,40 @@ func promptString(ctx context.Context, runner *interp.Runner, opts *shellOptions
 	if idx := strings.IndexByte(host, '.'); idx >= 0 {
 		short = host[:idx]
 	}
-	state := &promptState{
-		ctx:          ctx,
-		runner:       runner,
-		opts:         opts,
-		stdin:        subshellStdin(stdin),
-		stderr:       stderr,
-		dir:          runner.Dir,
+	return &promptEnv{
+		runner:       s.runner,
+		opts:         s.opts,
+		history:      s.history,
+		stdin:        subshellStdin(s.stdin),
+		stderr:       s.stderr,
 		host:         host,
 		shortHost:    short,
-		history:      history,
-		seq:          seq,
-		now:          time.Now(),
-		homeFallback: homeFallback,
-		userFallback: userFallback,
+		homeFallback: s.homeFallback,
+		userFallback: s.userFallback,
+		cache:        s.promptCache,
 	}
-	val, err := state.runScript(fmt.Sprintf("printf %%s \"${%s-}\"", name))
-	if err != nil || val == "" {
+}
+
+// render expands the prompt variable name (PS1, PS2) for command number seq,
+// falling back to fallback when it is unset or empty.
+func (e *promptEnv) render(ctx context.Context, name, fallback string, seq int) promptParts {
+	if e == nil || e.runner == nil {
 		return promptParts{prompt: fallback}
 	}
-	return splitPromptLines((&promptRenderer{src: val, state: state, cache: cache}).render())
+	src, _ := runnerStringVar(e.runner, name)
+	if src == "" {
+		return promptParts{prompt: fallback}
+	}
+	state := &promptState{
+		env:       e,
+		ctx:       ctx,
+		dir:       e.runner.Dir,
+		host:      e.host,
+		shortHost: e.shortHost,
+		seq:       seq,
+		now:       time.Now(),
+	}
+	return splitPromptLines((&promptRenderer{src: src, state: state, cache: e.cache}).render())
 }
 
 type promptParts struct {
@@ -116,23 +150,23 @@ func splitPromptLines(val string) promptParts {
 	}
 }
 
+// promptState is one prompt expansion: the snapshot of the shell state that
+// every escape in a single draw must agree on (clock, command number, working
+// directory) plus a memo of the variables it has already read.
 type promptState struct {
-	ctx          context.Context
-	runner       *interp.Runner
-	opts         *shellOptions
-	stdin        io.Reader
-	stderr       io.Writer
-	vars         map[string]string
-	dir          string
-	host         string
-	shortHost    string
-	history      *history
-	seq          int
-	now          time.Time
-	homeFallback string
-	userFallback string
+	env       *promptEnv
+	ctx       context.Context
+	vars      map[string]string
+	dir       string
+	host      string
+	shortHost string
+	seq       int
+	now       time.Time
 }
 
+// shellVar reads a plain shell variable, memoized so that a prompt naming the
+// same variable twice reads it once. The read goes straight to the
+// interpreter's variables; no subshell is involved.
 func (p *promptState) shellVar(name string) string {
 	if p.vars == nil {
 		p.vars = make(map[string]string)
@@ -140,10 +174,9 @@ func (p *promptState) shellVar(name string) string {
 	if val, ok := p.vars[name]; ok {
 		return val
 	}
-	script := fmt.Sprintf("printf %%s \"${%s-}\"", name)
-	val, err := p.runScript(script)
-	if err != nil {
-		val = ""
+	var val string
+	if p.env != nil {
+		val, _ = runnerStringVar(p.env.runner, name)
 	}
 	p.vars[name] = val
 	return val
@@ -153,8 +186,8 @@ func (p *promptState) user() string {
 	if val := p.shellVar("USER"); val != "" {
 		return val
 	}
-	if p.userFallback != "" {
-		return p.userFallback
+	if p.env != nil && p.env.userFallback != "" {
+		return p.env.userFallback
 	}
 	return fmt.Sprintf("%d", os.Getuid())
 }
@@ -163,7 +196,10 @@ func (p *promptState) home() string {
 	if val := p.shellVar("HOME"); val != "" {
 		return val
 	}
-	return p.homeFallback
+	if p.env == nil {
+		return ""
+	}
+	return p.env.homeFallback
 }
 
 func (p *promptState) pwd() string {
@@ -186,16 +222,19 @@ func (p *promptState) promptSymbol() string {
 // promptvars reports whether parameter expansion and command substitution
 // should be performed on the prompt string, per the Bash promptvars option.
 func (p *promptState) promptvars() bool {
-	return p.opts == nil || shoptEnabled(p.opts, "promptvars")
+	if p.env == nil || p.env.opts == nil {
+		return true
+	}
+	return shoptEnabled(p.env.opts, "promptvars")
 }
 
 // historyNumber returns the number Bash assigns to the command about to be
 // entered: one past the current in-memory history count.
 func (p *promptState) historyNumber() string {
-	if p.history == nil {
+	if p.env == nil || p.env.history == nil {
 		return "0"
 	}
-	return strconv.Itoa(p.history.Len() + 1)
+	return strconv.Itoa(p.env.history.Len() + 1)
 }
 
 type promptRenderer struct {
@@ -631,13 +670,63 @@ func (p *promptState) runCommand(cmd string) string {
 	return out
 }
 
+// runParam expands one ${...} from the prompt. A plain ${name} or ${name-},
+// which is what a bare $name in a prompt parses to, is read directly from the
+// interpreter; anything with an operator, an index, or a special parameter
+// still goes through a subshell so that the interpreter does the expanding.
 func (p *promptState) runParam(expr string) string {
+	// An unset ${name} is left to the subshell: only there does set -u
+	// report it, whereas ${name-} is defined to expand to the empty string.
+	if name, defaulted := plainParamName(expr); name != "" && (defaulted || p.varIsSet(name)) {
+		return p.shellVar(name)
+	}
 	script := fmt.Sprintf("printf %%s \"%s\"", p.escapeDouble(expr))
 	out, err := p.runScript(script)
 	if err != nil {
 		return ""
 	}
 	return out
+}
+
+func (p *promptState) varIsSet(name string) bool {
+	if p.env == nil {
+		return false
+	}
+	_, ok := runnerStringVar(p.env.runner, name)
+	return ok
+}
+
+// plainParamName returns the variable name of a ${name} or ${name-}
+// expansion, which a direct variable read expands identically, and reports
+// whether the "-" default was present. Anything else - an operator, an index,
+// a special parameter, or one of the variables the interpreter computes on
+// each lookup - yields "" and is left to a real expansion.
+func plainParamName(expr string) (string, bool) {
+	body, ok := strings.CutPrefix(expr, "${")
+	if !ok {
+		return "", false
+	}
+	body, ok = strings.CutSuffix(body, "}")
+	if !ok {
+		return "", false
+	}
+	name, defaulted := strings.CutSuffix(body, "-")
+	if name == "" {
+		return "", false
+	}
+	// Reject the special parameters ($?, $$, $1, ...) along with anything
+	// that is not a bare name.
+	if c := name[0]; !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') && c != '_' {
+		return "", false
+	}
+	if scanned, end := scanPromptName(name, 0); scanned != name || end != len(name) {
+		return "", false
+	}
+	switch name {
+	case "LINENO", "RANDOM", "SRANDOM", "PPID", "DIRSTACK":
+		return "", false
+	}
+	return name, defaulted
 }
 
 func (p *promptState) runArithmetic(expr string) string {
@@ -650,9 +739,16 @@ func (p *promptState) runArithmetic(expr string) string {
 }
 
 func (p *promptState) runScript(script string) (string, error) {
-	return runSubshell(p.ctx, p.runner, p.stdin, p.stderr, script)
+	if p.env == nil {
+		return "", errors.New("gosh: prompt has no interpreter")
+	}
+	return runSubshell(p.ctx, p.env.runner, p.env.stdin, p.env.stderr, script)
 }
 
+// runSubshell runs script in a subshell of runner and returns its standard
+// output with trailing newlines removed, the way command substitution does.
+// Prompt and completion use it for the expansions that need the interpreter:
+// command substitution, arithmetic, and programmable completion functions.
 func runSubshell(ctx context.Context, runner *interp.Runner, stdin io.Reader, stderr io.Writer, script string) (string, error) {
 	if runner == nil {
 		return "", errors.New("gosh: prompt has no interpreter")

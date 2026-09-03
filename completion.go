@@ -616,12 +616,10 @@ func shouldEscapeCompletionRune(r rune, quote rune) bool {
 	}
 }
 
+// shellVar reads a plain shell variable straight from the interpreter, with
+// no subshell: PATH, PATHEXT and HOME are consulted on every completion.
 func (c *autoCompleter) shellVar(name string) string {
-	script := fmt.Sprintf("printf %%s \"${%s-}\"", name)
-	val, err := runSubshell(c.ctx, c.runner, c.stdin, c.stderr, script)
-	if err != nil {
-		return ""
-	}
+	val, _ := runnerStringVar(c.runner, name)
 	return val
 }
 

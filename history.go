@@ -140,20 +140,6 @@ func defaultShellHistoryFile(runner *interp.Runner) string {
 	return filepath.Join(home, ".gosh_history")
 }
 
-func runnerStringVar(runner *interp.Runner, name string) (string, bool) {
-	if runner != nil && runner.Vars != nil {
-		if vr, ok := runner.Vars[name]; ok && vr.IsSet() {
-			return vr.String(), true
-		}
-	}
-	if runner != nil && runner.Env != nil {
-		if vr := runner.Env.Get(name); vr.IsSet() {
-			return vr.String(), true
-		}
-	}
-	return "", false
-}
-
 func (h *history) LoadFile(name string) error {
 	if h == nil || name == "" {
 		return nil

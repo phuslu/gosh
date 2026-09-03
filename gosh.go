@@ -356,9 +356,10 @@ func (s *Shell) runCommand(ctx context.Context) error {
 }
 
 func (s *Shell) runInteractive(ctx context.Context) error {
+	prompts := s.newPromptEnv()
 	promptFallback := defaultPrompt(s.version)
 	promptSeq := 1
-	currentPrompt := promptString(ctx, s.runner, s.opts, s.history, s.stdin, s.stderr, s.hostname, s.homeFallback, s.userFallback, "PS1", promptFallback, promptSeq, s.promptCache)
+	currentPrompt := prompts.render(ctx, "PS1", promptFallback, promptSeq)
 	promptSeq++
 
 	s.history.cfg.inMemoryLimit = resolveShellHistoryLimit(s.runner)
@@ -381,7 +382,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 		runner:        s.runner,
 		opts:          s.opts,
 		completion:    s.completion,
-		stdin:         subshellStdin(s.stdin),
+		stdin:         prompts.stdin,
 		stdout:        conWriter,
 		stderr:        conWriter,
 		promptPrinter: promptPrinter,
@@ -453,7 +454,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 			s.cfg.OnPromptReset(ctx)
 		}
 		updateCheckwinsizeColumns(s.opts, s.runner, readlineColumns)
-		setPrompt(promptString(ctx, s.runner, s.opts, s.history, s.stdin, s.stderr, s.hostname, s.homeFallback, s.userFallback, "PS1", defaultPrompt(s.version), promptSeq, s.promptCache))
+		setPrompt(prompts.render(ctx, "PS1", defaultPrompt(s.version), promptSeq))
 		promptSeq++
 		flushPrefix()
 	}
@@ -484,7 +485,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 		// unclosed if/for blocks). Switch to the continuation prompt and keep
 		// reading without executing anything yet.
 		if s.parser.Incomplete() {
-			setPrompt(promptString(ctx, s.runner, s.opts, s.history, s.stdin, s.stderr, s.hostname, s.homeFallback, s.userFallback, "PS2", "> ", promptSeq, s.promptCache))
+			setPrompt(prompts.render(ctx, "PS2", "> ", promptSeq))
 			flushPrefix()
 			return true
 		}
