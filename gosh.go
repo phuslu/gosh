@@ -472,7 +472,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 	}()
 	defer close(interrupted)
 
-	// reader wraps readline so parser.Interactive can consume it as an
+	// reader wraps readline so parser.InteractiveSeq can consume it as an
 	// io.Reader. Each call to Read invokes Readline() to fetch one line.
 	// Ctrl-C (ErrInterrupt) injects a newline to abandon the current
 	// incomplete statement. Ctrl-D / EOF returns io.EOF to end the session.

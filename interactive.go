@@ -14,12 +14,23 @@ import (
 
 func runInteractiveParser(parser *syntax.Parser, r io.Reader, run func([]*syntax.Stmt) bool, handleError func(error) bool) error {
 	for {
-		err := parser.Interactive(r, run)
-		if err == nil {
+		var seqErr error
+		for stmts, err := range parser.InteractiveSeq(r) {
+			if err != nil {
+				seqErr = err
+				break
+			}
+			if !run(stmts) {
+				return nil
+			}
+		}
+		if seqErr == nil {
 			return nil
 		}
-		if handleError == nil || !handleError(err) {
-			return err
+		// Restart the parse loop after a recoverable error, matching the
+		// previous behavior of re-invoking the deprecated Interactive API.
+		if handleError == nil || !handleError(seqErr) {
+			return seqErr
 		}
 	}
 }
@@ -109,13 +120,18 @@ func parseNextStatements(data []byte, offset int) ([]*syntax.Stmt, int, error) {
 		}
 		var out []*syntax.Stmt
 		parser := syntax.NewParser()
-		err := parser.Interactive(bytes.NewReader(data[offset:next]), func(stmts []*syntax.Stmt) bool {
+		var err error
+		for stmts, seqErr := range parser.InteractiveSeq(bytes.NewReader(data[offset:next])) {
+			if seqErr != nil {
+				err = seqErr
+				break
+			}
 			if parser.Incomplete() {
-				return true
+				continue
 			}
 			out = append(out, stmts...)
-			return false
-		})
+			break
+		}
 		if err != nil {
 			if parser.Incomplete() || next < len(data) {
 				continue
@@ -130,7 +146,7 @@ func parseNextStatements(data []byte, offset int) ([]*syntax.Stmt, int, error) {
 }
 
 // reader adapts *readline.Instance to the io.Reader interface expected by
-// parser.Interactive. The parser calls Read whenever it needs more input.
+// parser.InteractiveSeq. The parser calls Read whenever it needs more input.
 type reader struct {
 	rl                  *readline.Instance
 	buf                 []byte // leftover bytes from the previous Readline call
