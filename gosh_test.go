@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -1012,6 +1013,105 @@ func TestShoptSetMixedOptions(t *testing.T) {
 	}
 	if got := stderr.String(); got != "" {
 		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+// TestShellOptionTableInvariants pins the descriptor table that shopt, "set
+// -o" and newShellOptions all derive from: names are unique, each namespace
+// keeps the exact contents and order shopt prints, and no option claims to be
+// both gosh-managed and upstream-supported.
+func TestShellOptionTableInvariants(t *testing.T) {
+	seen := make(map[string]bool, len(shellOptionTable))
+	for _, desc := range shellOptionTable {
+		if desc.name == "" {
+			t.Fatalf("shellOptionTable has an unnamed entry")
+		}
+		if seen[desc.name] {
+			t.Fatalf("shellOptionTable has duplicate option %q", desc.name)
+		}
+		seen[desc.name] = true
+		if desc.managed && desc.upstream {
+			t.Fatalf("option %q is both gosh-managed and upstream-supported", desc.name)
+		}
+		if desc.posix && (desc.managed || desc.upstream || desc.defaultOn || desc.interactiveOn) {
+			t.Fatalf("posix option %q must not carry bash option metadata", desc.name)
+		}
+	}
+
+	wantPosix := []string{
+		"allexport", "errexit", "noexec", "noglob", "nounset", "xtrace",
+		"pipefail",
+	}
+	wantBash := []string{
+		"dotglob", "expand_aliases", "extglob", "globstar", "nocaseglob",
+		"nullglob", "assoc_expand_once", "autocd", "cdable_vars", "cdspell",
+		"checkhash", "checkjobs", "checkwinsize", "cmdhist", "compat31",
+		"compat32", "compat40", "compat41", "compat42", "compat43",
+		"compat44", "complete_fullquote", "direxpand", "dirspell", "execfail",
+		"extdebug", "extquote", "failglob", "force_fignore",
+		"globasciiranges", "gnu_errfmt", "histappend", "histreedit",
+		"histverify", "hostcomplete", "huponexit", "inherit_errexit",
+		"interactive_comments", "lastpipe", "lithist", "localvar_inherit",
+		"localvar_unset", "login_shell", "mailwarn",
+		"no_empty_cmd_completion", "nocasematch", "progcomp", "progcomp_alias",
+		"promptvars", "restricted_shell", "shift_verbose", "sourcepath",
+		"xpg_echo",
+	}
+	if !reflect.DeepEqual(shoptPosixOptionNames, wantPosix) {
+		t.Fatalf("posix option names = %q, want %q", shoptPosixOptionNames, wantPosix)
+	}
+	if !reflect.DeepEqual(shoptBashOptionNames, wantBash) {
+		t.Fatalf("bash option names = %q, want %q", shoptBashOptionNames, wantBash)
+	}
+
+	wantDefaultOn := []string{
+		"checkwinsize", "cmdhist", "complete_fullquote", "extquote",
+		"force_fignore", "hostcomplete", "inherit_errexit",
+		"interactive_comments", "progcomp", "promptvars", "sourcepath",
+	}
+	wantManaged := []string{
+		"checkwinsize", "cmdhist", "failglob", "histappend", "hostcomplete",
+		"lithist", "progcomp", "promptvars",
+	}
+	wantUpstream := []string{
+		"dotglob", "expand_aliases", "extglob", "globstar", "nocaseglob",
+		"nullglob",
+	}
+	var gotDefaultOn, gotManaged, gotUpstream []string
+	for _, desc := range shellOptionTable {
+		if desc.defaultOn {
+			gotDefaultOn = append(gotDefaultOn, desc.name)
+		}
+		if desc.managed {
+			gotManaged = append(gotManaged, desc.name)
+		}
+		if desc.upstream {
+			gotUpstream = append(gotUpstream, desc.name)
+		}
+	}
+	sort.Strings(gotDefaultOn)
+	sort.Strings(gotManaged)
+	sort.Strings(gotUpstream)
+	if !reflect.DeepEqual(gotDefaultOn, wantDefaultOn) {
+		t.Fatalf("default-on options = %q, want %q", gotDefaultOn, wantDefaultOn)
+	}
+	if !reflect.DeepEqual(gotManaged, wantManaged) {
+		t.Fatalf("managed options = %q, want %q", gotManaged, wantManaged)
+	}
+	if !reflect.DeepEqual(gotUpstream, wantUpstream) {
+		t.Fatalf("upstream options = %q, want %q", gotUpstream, wantUpstream)
+	}
+
+	// The interactive default is the sole difference between the two
+	// newShellOptions flavours.
+	script, interactive := newShellOptions(false), newShellOptions(true)
+	for _, name := range shoptBashOptionNames {
+		scriptOn, _ := script.enabled(false, name)
+		interactiveOn, _ := interactive.enabled(false, name)
+		want := scriptOn || name == "expand_aliases"
+		if interactiveOn != want {
+			t.Fatalf("interactive default for %q = %v, want %v", name, interactiveOn, want)
+		}
 	}
 }
 

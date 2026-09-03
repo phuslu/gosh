@@ -8,74 +8,6 @@ import (
 	"mvdan.cc/sh/v3/interp"
 )
 
-// These tables mirror mvdan.cc/sh's internal shopt option order, because the
-// corresponding option states are only exposed as an unexported bool slice.
-var shoptPosixOptionNames = []string{
-	"allexport",
-	"errexit",
-	"noexec",
-	"noglob",
-	"nounset",
-	"xtrace",
-	"pipefail",
-}
-
-var shoptBashOptionNames = []string{
-	"dotglob",
-	"expand_aliases",
-	"extglob",
-	"globstar",
-	"nocaseglob",
-	"nullglob",
-	"assoc_expand_once",
-	"autocd",
-	"cdable_vars",
-	"cdspell",
-	"checkhash",
-	"checkjobs",
-	"checkwinsize",
-	"cmdhist",
-	"compat31",
-	"compat32",
-	"compat40",
-	"compat41",
-	"compat42",
-	"compat43",
-	"compat44",
-	"complete_fullquote",
-	"direxpand",
-	"dirspell",
-	"execfail",
-	"extdebug",
-	"extquote",
-	"failglob",
-	"force_fignore",
-	"globasciiranges",
-	"gnu_errfmt",
-	"histappend",
-	"histreedit",
-	"histverify",
-	"hostcomplete",
-	"huponexit",
-	"inherit_errexit",
-	"interactive_comments",
-	"lastpipe",
-	"lithist",
-	"localvar_inherit",
-	"localvar_unset",
-	"login_shell",
-	"mailwarn",
-	"no_empty_cmd_completion",
-	"nocasematch",
-	"progcomp",
-	"progcomp_alias",
-	"promptvars",
-	"restricted_shell",
-	"shift_verbose",
-	"sourcepath",
-	"xpg_echo",
-}
-
 type shoptArgs struct {
 	quiet       bool
 	posix       bool
@@ -285,21 +217,10 @@ func shoptArgsHaveManagedOption(args []string) bool {
 	return false
 }
 
+// shoptManagedOption reports whether gosh implements the named option itself
+// rather than delegating it to interp.BashOpts.
 func shoptManagedOption(name string) bool {
-	switch name {
-	case "checkwinsize", "cmdhist", "failglob", "histappend", "hostcomplete",
-		"lithist", "progcomp", "promptvars":
-		return true
-	}
-	return false
-}
-
-func shoptBuiltinSupportedOption(name string) bool {
-	switch name {
-	case "dotglob", "expand_aliases", "extglob", "globstar", "nocaseglob", "nullglob":
-		return true
-	}
-	return false
+	return shellOptionIndex[name].managed
 }
 
 func printShoptOptions(w interface {

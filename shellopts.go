@@ -73,6 +73,121 @@ func (e *shellEnviron) Set(name string, vr expand.Variable) error {
 	return nil
 }
 
+// shellOptionDesc describes one shell option: which namespace it lives in,
+// how it starts out, and who implements it. It is the single source of truth
+// for the option metadata that shopt, "set -o" and the prompt/completion code
+// used to rediscover through separate switch statements.
+type shellOptionDesc struct {
+	name string
+	// posix marks a "set -o" option instead of a shopt option.
+	posix bool
+	// defaultOn marks an option that starts enabled.
+	defaultOn bool
+	// interactiveOn marks an option that also starts enabled in an
+	// interactive shell.
+	interactiveOn bool
+	// managed marks an option upstream declares unsupported but gosh
+	// implements itself.
+	managed bool
+	// upstream marks an option mvdan.cc/sh implements via interp.BashOpts.
+	upstream bool
+}
+
+// shellOptionTable lists every option gosh mirrors, in the order shopt prints
+// it. The order matches mvdan.cc/sh's internal shopt option order, because the
+// corresponding option states are only exposed as an unexported bool slice.
+// managed and upstream are mutually exclusive by construction.
+var shellOptionTable = []shellOptionDesc{
+	{name: "allexport", posix: true},
+	{name: "errexit", posix: true},
+	{name: "noexec", posix: true},
+	{name: "noglob", posix: true},
+	{name: "nounset", posix: true},
+	{name: "xtrace", posix: true},
+	{name: "pipefail", posix: true},
+
+	{name: "dotglob", upstream: true},
+	{name: "expand_aliases", upstream: true, interactiveOn: true},
+	{name: "extglob", upstream: true},
+	{name: "globstar", upstream: true},
+	{name: "nocaseglob", upstream: true},
+	{name: "nullglob", upstream: true},
+	{name: "assoc_expand_once"},
+	{name: "autocd"},
+	{name: "cdable_vars"},
+	{name: "cdspell"},
+	{name: "checkhash"},
+	{name: "checkjobs"},
+	{name: "checkwinsize", defaultOn: true, managed: true},
+	{name: "cmdhist", defaultOn: true, managed: true},
+	{name: "compat31"},
+	{name: "compat32"},
+	{name: "compat40"},
+	{name: "compat41"},
+	{name: "compat42"},
+	{name: "compat43"},
+	{name: "compat44"},
+	{name: "complete_fullquote", defaultOn: true},
+	{name: "direxpand"},
+	{name: "dirspell"},
+	{name: "execfail"},
+	{name: "extdebug"},
+	{name: "extquote", defaultOn: true},
+	{name: "failglob", managed: true},
+	{name: "force_fignore", defaultOn: true},
+	{name: "globasciiranges"},
+	{name: "gnu_errfmt"},
+	{name: "histappend", managed: true},
+	{name: "histreedit"},
+	{name: "histverify"},
+	{name: "hostcomplete", defaultOn: true, managed: true},
+	{name: "huponexit"},
+	{name: "inherit_errexit", defaultOn: true},
+	{name: "interactive_comments", defaultOn: true},
+	{name: "lastpipe"},
+	{name: "lithist", managed: true},
+	{name: "localvar_inherit"},
+	{name: "localvar_unset"},
+	{name: "login_shell"},
+	{name: "mailwarn"},
+	{name: "no_empty_cmd_completion"},
+	{name: "nocasematch"},
+	{name: "progcomp", defaultOn: true, managed: true},
+	{name: "progcomp_alias"},
+	{name: "promptvars", defaultOn: true, managed: true},
+	{name: "restricted_shell"},
+	{name: "shift_verbose"},
+	{name: "sourcepath", defaultOn: true},
+	{name: "xpg_echo"},
+}
+
+// shellOptionIndex indexes shellOptionTable by name. Option names are unique
+// across both namespaces, so one map covers them all.
+var shellOptionIndex = func() map[string]shellOptionDesc {
+	index := make(map[string]shellOptionDesc, len(shellOptionTable))
+	for _, desc := range shellOptionTable {
+		index[desc.name] = desc
+	}
+	return index
+}()
+
+// shellOptionNames returns the table's option names for one namespace, in
+// listing order.
+func shellOptionNames(posix bool) []string {
+	names := make([]string, 0, len(shellOptionTable))
+	for _, desc := range shellOptionTable {
+		if desc.posix == posix {
+			names = append(names, desc.name)
+		}
+	}
+	return names
+}
+
+var (
+	shoptPosixOptionNames = shellOptionNames(true)
+	shoptBashOptionNames  = shellOptionNames(false)
+)
+
 // shellOptions mirrors the shell option state needed by gosh's shopt and
 // prompt/completion code. Mutation goes through the public mvdan.cc/sh API
 // (interp.BashOpts and the "set"/"shopt" builtins); this map is gosh's
@@ -89,29 +204,15 @@ func newShellOptions(interactive bool) *shellOptions {
 		posix: make(map[string]*bool, len(shoptPosixOptionNames)),
 		bash:  make(map[string]*bool, len(shoptBashOptionNames)),
 	}
-	for _, name := range shoptPosixOptionNames {
-		value := false
-		opts.posix[name] = &value
-	}
-	for _, name := range shoptBashOptionNames {
-		value := defaultBashOptionState(name)
-		opts.bash[name] = &value
-	}
-	if interactive {
-		*opts.bash["expand_aliases"] = true
+	for _, desc := range shellOptionTable {
+		value := desc.defaultOn || (interactive && desc.interactiveOn)
+		if desc.posix {
+			opts.posix[desc.name] = &value
+			continue
+		}
+		opts.bash[desc.name] = &value
 	}
 	return opts
-}
-
-func defaultBashOptionState(name string) bool {
-	switch name {
-	case "checkwinsize", "cmdhist", "complete_fullquote", "extquote",
-		"force_fignore", "hostcomplete", "inherit_errexit",
-		"interactive_comments", "progcomp", "promptvars", "sourcepath":
-		return true
-	default:
-		return false
-	}
 }
 
 func (o *shellOptions) option(posix bool, name string) (*bool, bool, bool) {
@@ -128,9 +229,8 @@ func (o *shellOptions) option(posix bool, name string) (*bool, bool, bool) {
 	if !ok {
 		return nil, false, false
 	}
-	managed := shoptManagedOption(name)
-	supported := managed || shoptBuiltinSupportedOption(name)
-	return opt, supported, managed
+	desc := shellOptionIndex[name]
+	return opt, desc.managed || desc.upstream, desc.managed
 }
 
 // enabled reports whether the named option is on and whether it exists at
