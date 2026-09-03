@@ -28,6 +28,29 @@ type memorySource struct {
 	file *os.File
 }
 
+// newStdinFile writes the full stdin data to one temp file, preserving the
+// file semantics the interpreter needs (byte-wise reads, read deadlines, fd
+// inheritance). gosh seeks this single file before each statement batch;
+// creating and filling a fresh file per statement made large inputs
+// quadratic in disk writes.
+func newStdinFile(data []byte) (*os.File, error) {
+	file, err := os.CreateTemp("", "gosh-stdin-*")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		os.Remove(file.Name())
+		return nil, err
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		file.Close()
+		os.Remove(file.Name())
+		return nil, err
+	}
+	return file, nil
+}
+
 func (s *memorySource) Data() []byte { return s.data }
 
 func (s *memorySource) StdinFile() (*os.File, error) {

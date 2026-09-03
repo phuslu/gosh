@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/phuslu/gosh/internal/readline"
 	"mvdan.cc/sh/v3/interp"
@@ -128,29 +127,6 @@ func parseNextStatements(data []byte, offset int) ([]*syntax.Stmt, int, error) {
 		}
 	}
 	return nil, len(data), io.ErrUnexpectedEOF
-}
-
-// newStdinFile writes the full stdin data to one temp file, preserving the
-// file semantics the interpreter needs (byte-wise reads, read deadlines, fd
-// inheritance). gosh seeks this single file before each statement batch;
-// creating and filling a fresh file per statement made large inputs
-// quadratic in disk writes.
-func newStdinFile(data []byte) (*os.File, error) {
-	file, err := os.CreateTemp("", "gosh-stdin-*")
-	if err != nil {
-		return nil, err
-	}
-	if _, err := file.Write(data); err != nil {
-		file.Close()
-		os.Remove(file.Name())
-		return nil, err
-	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		file.Close()
-		os.Remove(file.Name())
-		return nil, err
-	}
-	return file, nil
 }
 
 // reader adapts *readline.Instance to the io.Reader interface expected by

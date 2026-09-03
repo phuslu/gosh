@@ -203,7 +203,7 @@ func (s *Shell) initialize() error {
 	}
 
 	s.parser = syntax.NewParser()
-	s.history = &history{cfg: historyConfig{inMemoryLimit: resolveHistoryLimit()}}
+	s.history = &history{cfg: historyConfig{inMemoryLimit: defaultHistoryLimit}}
 	s.bindings = &keyBindingManager{entries: make(map[string]*goKeyBindingEntry)}
 	s.completion = newCompletionRegistry()
 	s.opts = newShellOptions(s.interactive)
@@ -370,8 +370,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 	histFile := resolveShellHistoryFile(s.runner)
 	s.history.cfg.file = histFile
 	s.history.appendOnAdd = func() bool {
-		enabled, _ := shoptOptionEnabled(s.opts, false, "histappend")
-		return enabled
+		return shoptEnabled(s.opts, "histappend")
 	}
 
 	conWriter := ptyNewConsoleANSIWriter(s.stderr)
@@ -428,12 +427,13 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 	s.history.resync()
 	completer.attach(rl)
 	historySearch.Attach(rl)
-	updateCheckwinsizeColumns(s.opts, s.runner, func() int {
+	readlineColumns := func() int {
 		if width, _ := rl.GetConfig().FuncGetSize(); width > 0 {
 			return width
 		}
 		return 0
-	})
+	}
+	updateCheckwinsizeColumns(s.opts, s.runner, readlineColumns)
 	promptPrinter.Print(rl.Stdout(), currentPrompt.prefix)
 	nextPrefix := ""
 	setPrompt := func(parts promptParts) {
@@ -452,12 +452,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 			// Windows consoles may lose VT mode after programs exit.
 			s.cfg.OnPromptReset(ctx)
 		}
-		updateCheckwinsizeColumns(s.opts, s.runner, func() int {
-			if width, _ := rl.GetConfig().FuncGetSize(); width > 0 {
-				return width
-			}
-			return 0
-		})
+		updateCheckwinsizeColumns(s.opts, s.runner, readlineColumns)
 		setPrompt(promptString(ctx, s.runner, s.opts, s.history, s.stdin, s.stderr, s.hostname, s.homeFallback, s.userFallback, "PS1", defaultPrompt(s.version), promptSeq, s.promptCache))
 		promptSeq++
 		flushPrefix()

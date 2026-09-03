@@ -64,7 +64,7 @@ func TestShellStateDoesNotLeakHostEnvironment(t *testing.T) {
 	if got := resolveShellHistoryFile(runner); got != "" {
 		t.Fatalf("history file leaked host HISTFILE: %q", got)
 	}
-	if got := resolveHistoryLimit(); got != 500 {
+	if got := resolveShellHistoryLimit(runner); got != 500 {
 		t.Fatalf("default history limit = %d, want 500", got)
 	}
 }

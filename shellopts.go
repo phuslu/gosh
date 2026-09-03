@@ -133,7 +133,12 @@ func (o *shellOptions) option(posix bool, name string) (*bool, bool, bool) {
 	return opt, supported, managed
 }
 
+// enabled reports whether the named option is on and whether it exists at
+// all. A nil receiver has no options, so nothing is enabled.
 func (o *shellOptions) enabled(posix bool, name string) (bool, bool) {
+	if o == nil {
+		return false, false
+	}
 	opt, _, _ := o.option(posix, name)
 	if opt == nil {
 		return false, false

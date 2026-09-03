@@ -32,12 +32,9 @@ func TestHistorySizeParsing(t *testing.T) {
 		{" 7 ", 7},
 	}
 	for _, tc := range cases {
-		if got := parseHistorySize(tc.val); got != tc.want {
-			t.Errorf("parseHistorySize(%q) = %d, want %d", tc.val, got, tc.want)
+		if got := parseHistoryLimit(tc.val); got != tc.want {
+			t.Errorf("parseHistoryLimit(%q) = %d, want %d", tc.val, got, tc.want)
 		}
-	}
-	if got := resolveHistoryLimit(); got != defaultHistoryLimit {
-		t.Errorf("resolveHistoryLimit() = %d, want %d", got, defaultHistoryLimit)
 	}
 }
 
@@ -54,8 +51,8 @@ func TestHistoryFileLimitParsing(t *testing.T) {
 		{"3.5", -1},
 	}
 	for _, tc := range cases {
-		if got := parseHistoryFileLimit(tc.val); got != tc.want {
-			t.Errorf("parseHistoryFileLimit(%q) = %d, want %d", tc.val, got, tc.want)
+		if got := parseHistoryLimit(tc.val); got != tc.want {
+			t.Errorf("parseHistoryLimit(%q) = %d, want %d", tc.val, got, tc.want)
 		}
 	}
 }

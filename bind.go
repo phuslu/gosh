@@ -72,16 +72,41 @@ func (m *keyBindingManager) handleBind(args []string, out io.Writer) error {
 	return nil
 }
 
+// bindActions is the single source of truth for the actions `bind`
+// understands. The first name of an entry is the canonical one printed by
+// `bind` and `bind -P`; the rest are accepted aliases.
+var bindActions = []struct {
+	names  []string
+	action rune
+}{
+	{[]string{"beginning-of-line", "start-of-line", "home"}, readline.CharLineStart},
+	{[]string{"end-of-line", "cursor-end", "end"}, readline.CharLineEnd},
+	{[]string{"previous-screen"}, readline.CharPrev},
+	{[]string{"next-screen"}, readline.CharNext},
+	{[]string{"history-search-backward"}, keyActionHistorySearchBackward},
+	{[]string{"history-search-forward"}, keyActionHistorySearchForward},
+}
+
 // bindActionNames maps readline action runes back to the bind syntax names,
 // used by `bind` with no arguments and `bind -P`.
-var bindActionNames = map[rune]string{
-	readline.CharLineStart:         "beginning-of-line",
-	readline.CharLineEnd:           "end-of-line",
-	readline.CharPrev:              "previous-screen",
-	readline.CharNext:              "next-screen",
-	keyActionHistorySearchBackward: "history-search-backward",
-	keyActionHistorySearchForward:  "history-search-forward",
-}
+var bindActionNames = func() map[rune]string {
+	names := make(map[rune]string, len(bindActions))
+	for _, entry := range bindActions {
+		names[entry.action] = entry.names[0]
+	}
+	return names
+}()
+
+// bindActionByName resolves every accepted name and alias to its action rune.
+var bindActionByName = func() map[string]rune {
+	actions := make(map[string]rune, len(bindActions))
+	for _, entry := range bindActions {
+		for _, name := range entry.names {
+			actions[name] = entry.action
+		}
+	}
+	return actions
+}()
 
 // keySequenceSpec renders a bound key sequence back in bind syntax, e.g.
 // "\e[A" or "\C-a".
@@ -257,22 +282,8 @@ func parseKeySequence(spec string) ([]byte, error) {
 }
 
 func lookupBindAction(action string) (rune, bool) {
-	switch strings.ToLower(trimOuterQuotes(strings.TrimSpace(action))) {
-	case "beginning-of-line", "start-of-line", "home":
-		return readline.CharLineStart, true
-	case "end-of-line", "cursor-end", "end":
-		return readline.CharLineEnd, true
-	case "previous-screen":
-		return readline.CharPrev, true
-	case "next-screen":
-		return readline.CharNext, true
-	case "history-search-backward":
-		return keyActionHistorySearchBackward, true
-	case "history-search-forward":
-		return keyActionHistorySearchForward, true
-	default:
-		return 0, false
-	}
+	rn, ok := bindActionByName[strings.ToLower(trimOuterQuotes(strings.TrimSpace(action)))]
+	return rn, ok
 }
 
 func trimOuterQuotes(s string) string {

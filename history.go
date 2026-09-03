@@ -63,35 +63,18 @@ func readlineHistoryLimit(limit int) int {
 	}
 }
 
-func resolveHistoryLimit() int {
+func resolveShellHistoryLimit(runner *interp.Runner) int {
+	if val, ok := runnerStringVar(runner, "HISTSIZE"); ok {
+		return parseHistoryLimit(val)
+	}
 	return defaultHistoryLimit
 }
 
-func resolveShellHistoryLimit(runner *interp.Runner) int {
-	if val, ok := runnerStringVar(runner, "HISTSIZE"); ok {
-		return parseHistorySize(val)
-	}
-	return resolveHistoryLimit()
-}
-
-// parseHistorySize follows Bash's startup behavior for HISTSIZE: a missing
-// value means the default (handled by the caller), while a negative, empty,
-// or non-numeric value means unlimited history.
-func parseHistorySize(val string) int {
-	val = strings.TrimSpace(val)
-	if val == "" {
-		return -1
-	}
-	n, err := strconv.Atoi(val)
-	if err != nil || n < 0 {
-		return -1
-	}
-	return n
-}
-
-// parseHistoryFileLimit parses HISTFILESIZE. Any value that is not a plain
-// non-negative integer means "do not truncate the history file".
-func parseHistoryFileLimit(val string) int {
+// parseHistoryLimit follows Bash's startup behavior for HISTSIZE and
+// HISTFILESIZE: a missing value means the default (handled by the caller),
+// while a negative, empty, or non-numeric value means "no limit" - unlimited
+// history for HISTSIZE, no truncation for HISTFILESIZE.
+func parseHistoryLimit(val string) int {
 	val = strings.TrimSpace(val)
 	if val == "" {
 		return -1
@@ -105,7 +88,7 @@ func parseHistoryFileLimit(val string) int {
 
 func resolveShellHistoryFileLimit(runner *interp.Runner) int {
 	if val, ok := runnerStringVar(runner, "HISTFILESIZE"); ok {
-		return parseHistoryFileLimit(val)
+		return parseHistoryLimit(val)
 	}
 	return -1
 }
@@ -203,24 +186,15 @@ func (h *history) Load(r io.Reader) error {
 }
 
 func (h *history) Add(line string) bool {
-	line = strings.TrimRight(line, "\r\n")
-	if strings.TrimSpace(line) == "" {
+	line, ok := normalizeHistoryLine(line)
+	if !ok {
 		return false
 	}
 	h.mu.Lock()
-	if h.cfg.inMemoryLimit == 0 {
+	if !h.controlAllowsLocked(line) || !h.appendLocked(line) {
 		h.mu.Unlock()
 		return false
 	}
-	if h.cfg.control.ignoreSpace && strings.HasPrefix(line, " ") {
-		h.mu.Unlock()
-		return false
-	}
-	if h.cfg.control.ignoreDups && len(h.entries) > 0 && h.entries[len(h.entries)-1] == line {
-		h.mu.Unlock()
-		return false
-	}
-	h.appendLocked(line)
 	appendNow := h.shouldAppendOnAdd()
 	if !appendNow {
 		h.dirtyFile = true
@@ -235,23 +209,45 @@ func (h *history) Add(line string) bool {
 }
 
 func (h *history) append(line string) {
-	line = strings.TrimRight(line, "\r\n")
-	if strings.TrimSpace(line) == "" {
+	line, ok := normalizeHistoryLine(line)
+	if !ok {
 		return
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.cfg.inMemoryLimit == 0 {
-		return
-	}
 	h.appendLocked(line)
 }
 
-func (h *history) appendLocked(line string) {
+// normalizeHistoryLine strips the trailing newline from line and reports
+// whether what is left is worth remembering.
+func normalizeHistoryLine(line string) (string, bool) {
+	line = strings.TrimRight(line, "\r\n")
+	return line, strings.TrimSpace(line) != ""
+}
+
+// controlAllowsLocked reports whether HISTCONTROL lets line be remembered.
+// h.mu must be held.
+func (h *history) controlAllowsLocked(line string) bool {
+	if h.cfg.control.ignoreSpace && strings.HasPrefix(line, " ") {
+		return false
+	}
+	if h.cfg.control.ignoreDups && len(h.entries) > 0 && h.entries[len(h.entries)-1] == line {
+		return false
+	}
+	return true
+}
+
+// appendLocked stores line, honoring HISTSIZE, and reports whether it was
+// stored. h.mu must be held.
+func (h *history) appendLocked(line string) bool {
+	if h.cfg.inMemoryLimit == 0 {
+		return false
+	}
 	h.entries = append(h.entries, line)
 	if h.cfg.inMemoryLimit > 0 && len(h.entries) > h.cfg.inMemoryLimit {
 		h.entries = h.entries[len(h.entries)-h.cfg.inMemoryLimit:]
 	}
+	return true
 }
 
 func (h *history) Entries() []string {
@@ -314,11 +310,22 @@ func (h *history) appendFile(line string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(file, encodeHistoryLine(line)); err != nil {
+	if err := writeHistoryLines(file, line); err != nil {
 		file.Close()
 		return err
 	}
 	return file.Close()
+}
+
+// writeHistoryLines writes entries to w in history-file format, one encoded
+// entry per line. It is shared by the append and rewrite paths.
+func writeHistoryLines(w io.Writer, entries ...string) error {
+	for _, entry := range entries {
+		if _, err := fmt.Fprintln(w, encodeHistoryLine(entry)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h *history) shouldAppendOnAdd() bool {
@@ -358,12 +365,7 @@ func (h *history) WriteFile(name string) error {
 	}
 	entries := h.Entries()
 	err := writeFileAtomic(name, func(w io.Writer) error {
-		for _, entry := range entries {
-			if _, err := fmt.Fprintln(w, encodeHistoryLine(entry)); err != nil {
-				return err
-			}
-		}
-		return nil
+		return writeHistoryLines(w, entries...)
 	})
 	if err != nil {
 		return err

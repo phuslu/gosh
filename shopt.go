@@ -259,7 +259,7 @@ func runShopt(ctx context.Context, runner *interp.Runner, opts *shellOptions, ar
 		return nil
 	}
 	for _, arg := range parsed.args {
-		enabled, ok := shoptOptionEnabled(opts, parsed.posix, arg)
+		enabled, ok := opts.enabled(parsed.posix, arg)
 		if !ok {
 			fmt.Fprintf(hc.Stderr, "shopt: invalid option name %q\n", arg)
 			return interp.ExitStatus(1)
@@ -310,16 +310,10 @@ func setShoptOptions(ctx context.Context, runner *interp.Runner, opts *shellOpti
 	return nil
 }
 
-func shoptOptionEnabled(opts *shellOptions, posix bool, name string) (bool, bool) {
-	opt, _, _ := shoptOption(opts, posix, name)
-	if opt == nil {
-		return false, false
-	}
-	return *opt, true
-}
-
+// shoptEnabled reports whether the named Bash option is on, treating an
+// unknown option and a nil option set as "off".
 func shoptEnabled(opts *shellOptions, name string) bool {
-	enabled, ok := shoptOptionEnabled(opts, false, name)
+	enabled, ok := opts.enabled(false, name)
 	return ok && enabled
 }
 
