@@ -217,7 +217,7 @@ func (s *Shell) initialize() error {
 		opts:       s.opts,
 	}
 	opts = append(opts, interp.CallHandler(callHandler(deps)))
-	opts = append(opts, interp.ExecHandlers(execHandler(deps.runner, s.opts, backendExec(s.cfg.Backend))))
+	opts = append(opts, interp.ExecHandlers(execHandler(deps, backendExec(s.cfg.Backend))))
 
 	runner, err := interp.New(opts...)
 	if err != nil {

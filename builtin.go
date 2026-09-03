@@ -135,24 +135,15 @@ func fcOffset(spec string, n int) (int, error) {
 	return off, nil
 }
 
-func dropBuiltinPrintfDashDash(args []string) ([]string, bool) {
-	if len(args) < 2 || args[0] != "printf" || args[1] != "--" {
+// dropPrintfDashDash strips the leading "--" that Bash's printf accepts as an
+// end-of-options marker but mvdan.cc/sh treats as a format string.
+func dropPrintfDashDash(args []string) ([]string, bool) {
+	if len(args) < 2 || args[1] != "--" {
 		return nil, false
 	}
 	next := make([]string, 1, len(args)-1)
 	next[0] = args[0]
 	next = append(next, args[2:]...)
-	return next, true
-}
-
-func dropCommandPrintfDashDash(args []string) ([]string, bool) {
-	if len(args) < 3 || args[0] != "command" || args[1] != "printf" || args[2] != "--" {
-		return nil, false
-	}
-	next := make([]string, 2, len(args)-1)
-	next[0] = args[0]
-	next[1] = args[1]
-	next = append(next, args[3:]...)
 	return next, true
 }
 

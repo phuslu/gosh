@@ -8,8 +8,6 @@ import (
 	"mvdan.cc/sh/v3/interp"
 )
 
-const shoptCommand = "__gosh_shopt"
-
 // These tables mirror mvdan.cc/sh's internal shopt option order, because the
 // corresponding option states are only exposed as an unexported bool slice.
 var shoptPosixOptionNames = []string{
@@ -133,31 +131,6 @@ func (p *shoptFlagParser) args() []string {
 	return p.remaining
 }
 
-func backendExec(backend Backend) interp.ExecHandlerFunc {
-	if backend == nil {
-		return nil
-	}
-	return backend.Exec
-}
-
-func execHandler(runner func() *interp.Runner, opts *shellOptions, execBackend interp.ExecHandlerFunc) func(interp.ExecHandlerFunc) interp.ExecHandlerFunc {
-	return func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
-		return func(ctx context.Context, args []string) error {
-			if len(args) > 0 && args[0] == shoptCommand {
-				var r *interp.Runner
-				if runner != nil {
-					r = runner()
-				}
-				return runShopt(ctx, r, opts, args[1:])
-			}
-			if execBackend != nil {
-				return execBackend(ctx, args)
-			}
-			return next(ctx, args)
-		}
-	}
-}
-
 func shouldHandleShopt(args []string) bool {
 	parsed := parseShoptArgs(args)
 	if parsed.quiet {
@@ -175,27 +148,6 @@ func shouldHandleShopt(args []string) bool {
 		return true
 	}
 	return shoptArgsHaveManagedOption(parsed.args)
-}
-
-func commandShoptArgs(args []string) ([]string, bool) {
-	fp := shoptFlagParser{remaining: args}
-	show := false
-	for fp.more() {
-		switch flag := fp.flag(); flag {
-		case "-v":
-			show = true
-		default:
-			return nil, false
-		}
-	}
-	if show {
-		return nil, false
-	}
-	rest := fp.args()
-	if len(rest) == 0 || rest[0] != "shopt" || !shouldHandleShopt(rest[1:]) {
-		return nil, false
-	}
-	return rest[1:], true
 }
 
 func parseShoptArgs(args []string) shoptArgs {

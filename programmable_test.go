@@ -27,6 +27,7 @@ func newProgrammableCompleter(t *testing.T, functions string) *autoCompleter {
 		interp.StdIO(strings.NewReader(""), &stdout, &stderr),
 		interp.Env(expand.ListEnviron(testEnv(t)...)),
 		interp.CallHandler(callHandler(deps)),
+		interp.ExecHandlers(execHandler(deps, nil)),
 	)
 	if err != nil {
 		t.Fatal(err)
