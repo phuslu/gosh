@@ -200,7 +200,7 @@ Unlike Bash, gosh does not default `HISTFILESIZE` to `HISTSIZE`, so an unset
 `HISTFILESIZE` leaves the file untruncated, and multiline entries use the
 `# gosh-history-v1 <base64>` encoding introduced by earlier versions.
 
-As of `mvdan.cc/sh/v3` v3.14.0, `$-` only reports the interpreter's POSIX
+As of `mvdan.cc/sh/v3` v3.14.1, `$-` only reports the interpreter's POSIX
 option flags, so Bash flags like `i`, `m`, `h`, `B`, `H`, and `s` are not
 present. Use `GOSH_INTERACTIVE` to detect interactive sessions in startup
 files.

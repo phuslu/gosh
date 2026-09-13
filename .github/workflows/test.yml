@@ -27,7 +27,7 @@ jobs:
 
       - name: Check pinned mvdan version
         run: |
-          test "$(go list -m -f '{{.Version}}' mvdan.cc/sh/v3)" = 'v3.14.0'
+          test "$(go list -m -f '{{.Version}}' mvdan.cc/sh/v3)" = 'v3.14.1'
 
       - name: Vet
         run: go vet ./...
