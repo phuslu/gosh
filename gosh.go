@@ -187,7 +187,9 @@ func New(c Config) (*Shell, error) {
 
 func (s *Shell) initialize() error {
 	opts := []interp.RunnerOption{
-		interp.Interactive(true),
+		// Like Bash, only an interactive shell expands aliases by default;
+		// scripts can still opt in with "shopt -s expand_aliases".
+		interp.Interactive(s.interactive),
 		interp.StdIO(s.runnerStdin, s.stdout, s.stderr),
 		interp.Env(expand.ListEnviron(s.env...)),
 	}
@@ -368,6 +370,15 @@ func (s *Shell) Interactive(ctx context.Context) error {
 	defer cancel()
 	if s.cfg.IsTerminal && s.cfg.OnPromptReset != nil {
 		s.cfg.OnPromptReset(ctx)
+	}
+	if !s.interactive {
+		// A shell created for scripts starts with alias expansion off;
+		// attaching the interactive frontend turns it on, as for a shell
+		// that was interactive from the start.
+		if err := interp.Interactive(true)(s.runner); err != nil {
+			return err
+		}
+		s.opts.set(false, "expand_aliases", true)
 	}
 	return s.runInteractive(ctx)
 }

@@ -150,6 +150,11 @@ func TestDifferentialCoreScripts(t *testing.T) {
 		{"exit-status", `false; echo "$?"; true; echo "$?"`},
 		{"conditional-and-or", `false && echo bad || echo recovered`},
 		{"read", `read line < /dev/null; printf '<%s>\n' "$line"`},
+		{"aliases-off-in-scripts", `alias hi='echo alias'
+hi 2>/dev/null; echo "$?"; shopt -q expand_aliases; echo "$?"`},
+		{"aliases-opt-in", `shopt -s expand_aliases
+alias hi='echo alias'
+hi`},
 		{"heredoc", `cat <<EOF
 one
 two

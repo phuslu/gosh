@@ -196,3 +196,43 @@ func TestHistoryAppendErrorIsReported(t *testing.T) {
 		t.Fatal("history onError hook was not invoked")
 	}
 }
+
+func TestInteractiveShellExpandsAliases(t *testing.T) {
+	const script = "alias hi='echo alias'\nhi\nexit\n"
+	for _, tc := range []struct {
+		name  string
+		shell func(t *testing.T, stdout, stderr *bytes.Buffer) error
+	}{
+		{"forced interactive", func(t *testing.T, stdout, stderr *bytes.Buffer) error {
+			return Run(Config{
+				Args:   []string{"gosh", "-i", "--norc"},
+				Stdin:  strings.NewReader(script),
+				Stdout: stdout,
+				Stderr: stderr,
+				Env:    testEnv(t),
+			})
+		}},
+		{"frontend attached later", func(t *testing.T, stdout, stderr *bytes.Buffer) error {
+			shell, err := New(Config{
+				Stdin:  strings.NewReader(script),
+				Stdout: stdout,
+				Stderr: stderr,
+				Env:    testEnv(t),
+			})
+			if err != nil {
+				return err
+			}
+			return shell.Interactive(context.Background())
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := tc.shell(t, &stdout, &stderr); err != nil {
+				t.Fatalf("shell failed: %v\nstderr: %s", err, stderr.String())
+			}
+			if got := stdout.String(); got != "alias\n" {
+				t.Fatalf("stdout = %q, want %q\nstderr: %s", got, "alias\n", stderr.String())
+			}
+		})
+	}
+}
