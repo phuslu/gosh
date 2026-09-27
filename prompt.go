@@ -25,20 +25,6 @@ func defaultPrompt(version string) string {
 	return "sh-" + shortVersion(version) + symbol + " "
 }
 
-// subshellStdin chooses an stdin source for prompt and completion subshells.
-// os.File reads are safe to share with the shell and preserve terminal
-// behavior; arbitrary readers are not, and passing them to two interp.StdIO
-// copy goroutines at once would race, so they get an empty stdin instead.
-func subshellStdin(stdin io.Reader) io.Reader {
-	if stdin == nil {
-		return strings.NewReader("")
-	}
-	if _, ok := stdin.(*os.File); ok {
-		return stdin
-	}
-	return strings.NewReader("")
-}
-
 func shortVersion(version string) string {
 	if len(version) > 3 {
 		return version[:3]
@@ -81,7 +67,7 @@ func (s *Shell) newPromptEnv() *promptEnv {
 		runner:       s.runner,
 		opts:         s.opts,
 		history:      s.history,
-		stdin:        subshellStdin(s.stdin),
+		stdin:        s.stdin,
 		stderr:       s.stderr,
 		host:         host,
 		shortHost:    short,
@@ -781,9 +767,18 @@ func runSubshell(ctx context.Context, runner *interp.Runner, stdin io.Reader, st
 	if err != nil {
 		return "", err
 	}
+	// Only an os.File can be shared with the shell. For any other reader
+	// interp.StdIO starts a goroutine copying it into a pipe, and repeated
+	// subshells would race on the reader and steal the shell's input, so
+	// each subshell gets its own empty stdin instead.
+	if _, ok := stdin.(*os.File); !ok {
+		stdin = strings.NewReader("")
+	}
 	sub := runner.Subshell()
 	var buf bytes.Buffer
-	interp.StdIO(stdin, &buf, stderr)(sub)
+	if err := interp.StdIO(stdin, &buf, stderr)(sub); err != nil {
+		return "", err
+	}
 	if err := sub.Run(ctx, prog); err != nil {
 		return strings.TrimRight(buf.String(), "\n"), err
 	}
