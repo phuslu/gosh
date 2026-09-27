@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"strings"
+	"sync/atomic"
 
 	"github.com/phuslu/gosh/internal/readline"
 	"mvdan.cc/sh/v3/interp"
@@ -94,9 +97,22 @@ func runNonInteractiveStream(ctx context.Context, r io.Reader, runner *interp.Ru
 	return lastStatus
 }
 
-func runInteractiveStatements(ctx context.Context, runner *interp.Runner, stmts []*syntax.Stmt, stderr io.Writer) (bool, error) {
+// runInteractiveStatements runs one line of interactive input. A signal on
+// interrupts cancels the rest of the line: like Bash, ^C abandons the
+// running command and anything after it, sets $? to 130 and returns to the
+// prompt instead of ending the session.
+func runInteractiveStatements(ctx context.Context, runner *interp.Runner, stmts []*syntax.Stmt, stderr io.Writer, interrupts <-chan os.Signal) (bool, error) {
+	lineCtx, interrupted, stop := watchInterrupts(ctx, interrupts)
+	defer stop()
 	for _, stmt := range stmts {
-		err := runner.Run(ctx, stmt)
+		err := runner.Run(lineCtx, stmt)
+		if interrupted() && ctx.Err() == nil {
+			// The cancelled context marked the runner as exiting; the next
+			// Run clears that, so recording the status is all that is left.
+			fmt.Fprintln(stderr)
+			_ = runner.Run(ctx, interruptedStatus)
+			return true, nil
+		}
 		if runner.Exited() {
 			return false, err
 		}
@@ -109,6 +125,47 @@ func runInteractiveStatements(ctx context.Context, runner *interp.Runner, stmts 
 		}
 	}
 	return true, nil
+}
+
+// interruptedStatus sets $? to 128+SIGINT after an interrupted line.
+var interruptedStatus = func() *syntax.Stmt {
+	prog, err := syntax.NewParser().Parse(strings.NewReader("(exit 130)"), "")
+	if err != nil {
+		panic(err)
+	}
+	return prog.Stmts[0]
+}()
+
+// watchInterrupts derives a context which is cancelled by the next signal on
+// sigs. Signals which arrived while the prompt was waiting for input are
+// dropped first, so they cannot cancel a line typed afterwards. A nil sigs
+// returns ctx unchanged.
+func watchInterrupts(ctx context.Context, sigs <-chan os.Signal) (context.Context, func() bool, func()) {
+	if sigs == nil {
+		return ctx, func() bool { return false }, func() {}
+	}
+	for drained := false; !drained; {
+		select {
+		case <-sigs:
+		default:
+			drained = true
+		}
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	var hit atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-sigs:
+			hit.Store(true)
+			cancel()
+		case <-done:
+		}
+	}()
+	return ctx, hit.Load, func() {
+		close(done)
+		cancel()
+	}
 }
 
 func parseNextStatements(data []byte, offset int) ([]*syntax.Stmt, int, error) {

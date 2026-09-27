@@ -186,7 +186,7 @@ func TestRunInteractiveStatementsIgnoresOrdinaryExitStatus(t *testing.T) {
 	stmts := parseTestStmts(t, "dummy\n")
 	var stderr bytes.Buffer
 
-	cont, err := runInteractiveStatements(context.Background(), runner, stmts, &stderr)
+	cont, err := runInteractiveStatements(context.Background(), runner, stmts, &stderr, nil)
 	if !cont {
 		t.Fatalf("runInteractiveStatements stopped on ordinary exit status")
 	}
@@ -203,12 +203,50 @@ func TestRunInteractiveStatementsReturnsExecExitStatus(t *testing.T) {
 	stmts := parseTestStmts(t, "exec dummy\n")
 	var stderr bytes.Buffer
 
-	cont, err := runInteractiveStatements(context.Background(), runner, stmts, &stderr)
+	cont, err := runInteractiveStatements(context.Background(), runner, stmts, &stderr, nil)
 	if cont {
 		t.Fatalf("runInteractiveStatements continued after exec")
 	}
 	if got := ExitCode(err); got != 42 {
 		t.Fatalf("exec exit code = %d, want 42 (err: %v)", got, err)
+	}
+}
+
+func TestRunInteractiveStatementsInterrupt(t *testing.T) {
+	for _, src := range []string{
+		"while :; do :; done; echo after\n",
+		"sleep 10; echo after\n",
+	} {
+		var stdout, stderr bytes.Buffer
+		runner, err := interp.New(
+			interp.Interactive(true),
+			interp.StdIO(strings.NewReader(""), &stdout, &stderr),
+			interp.Env(expand.ListEnviron(testEnv(t)...)),
+		)
+		if err != nil {
+			t.Fatalf("interp.New failed: %v", err)
+		}
+		interrupts := make(chan os.Signal, 1)
+		timer := time.AfterFunc(100*time.Millisecond, func() { interrupts <- os.Interrupt })
+		start := time.Now()
+		cont, err := runInteractiveStatements(context.Background(), runner, parseTestStmts(t, src), &stderr, interrupts)
+		timer.Stop()
+		if !cont || err != nil {
+			t.Fatalf("%q: cont=%v err=%v, want the session to continue", src, cont, err)
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Fatalf("%q: interrupt took %v", src, elapsed)
+		}
+		if strings.Contains(stdout.String(), "after") {
+			t.Fatalf("%q: rest of the line ran after ^C: %q", src, stdout.String())
+		}
+		cont, err = runInteractiveStatements(context.Background(), runner, parseTestStmts(t, "echo status=$?\n"), &stderr, interrupts)
+		if !cont || err != nil {
+			t.Fatalf("%q: follow-up cont=%v err=%v", src, cont, err)
+		}
+		if got := stdout.String(); got != "status=130\n" {
+			t.Fatalf("%q: stdout = %q, want status=130", src, got)
+		}
 	}
 }
 

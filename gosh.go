@@ -472,6 +472,21 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 	}()
 	defer close(interrupted)
 
+	// While a command runs the terminal is back in cooked mode, so ^C and
+	// ^\ reach gosh as signals along with the foreground command. Like Bash,
+	// SIGINT only interrupts the current line and SIGQUIT is ignored; neither
+	// may end the session. Handlers, unlike signal.Ignore, are not inherited
+	// by the commands gosh starts.
+	var interrupts chan os.Signal
+	if s.cfgNotifySignals() {
+		interrupts = make(chan os.Signal, 1)
+		signal.Notify(interrupts, os.Interrupt)
+		defer signal.Stop(interrupts)
+		quits := make(chan os.Signal, 1)
+		signal.Notify(quits, syscall.SIGQUIT)
+		defer signal.Stop(quits)
+	}
+
 	// reader wraps readline so parser.InteractiveSeq can consume it as an
 	// io.Reader. Each call to Read invokes Readline() to fetch one line.
 	// Ctrl-C (ErrInterrupt) injects a newline to abandon the current
@@ -491,7 +506,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 		}
 
 		rdr.savePendingHistory()
-		cont, err := runInteractiveStatements(ctx, s.runner, stmts, rl.Stderr())
+		cont, err := runInteractiveStatements(ctx, s.runner, stmts, rl.Stderr(), interrupts)
 		if !cont {
 			exitErr = err
 			return false
