@@ -97,7 +97,7 @@ func requireBash(t *testing.T) {
 func runBothShells(t *testing.T, script string, env []string, dir string) (bash, gosh differentialShellResult) {
 	t.Helper()
 	bash = runDifferentialShell(t, "bash", []string{"--noprofile", "--norc", "-c", script}, nil, env, dir)
-	gosh = runDifferentialShell(t, testGoshBinary, []string{"gosh", "-c", script}, nil, env, dir)
+	gosh = runDifferentialShell(t, testGoshBinary, []string{"-c", script}, nil, env, dir)
 	return bash, gosh
 }
 
@@ -160,7 +160,7 @@ EOF`},
 		t.Run(tc.name, func(t *testing.T) {
 			bashArgs := []string{"--noprofile", "--norc", "-c", tc.script}
 			want := runDifferentialShell(t, "bash", bashArgs, nil, env, dir)
-			got := runDifferentialShell(t, testGoshBinary, []string{"gosh", "-c", tc.script}, nil, env, dir)
+			got := runDifferentialShell(t, testGoshBinary, []string{"-c", tc.script}, nil, env, dir)
 			if got.code != want.code {
 				t.Fatalf("exit code mismatch: bash=%d gosh=%d\nbash stdout: %q\ngosh stdout: %q\ngosh stderr: %q",
 					want.code, got.code, want.stdout, got.stdout, got.stderr)
@@ -188,7 +188,7 @@ func TestDifferentialNonInteractiveStdin(t *testing.T) {
 	env := testEnv(t)
 
 	bash := runDifferentialShell(t, "bash", []string{"--noprofile", "--norc"}, script, env, "")
-	gosh := runDifferentialShell(t, testGoshBinary, []string{"gosh"}, script, env, "")
+	gosh := runDifferentialShell(t, testGoshBinary, nil, script, env, "")
 	if gosh.code != bash.code {
 		t.Fatalf("exit code mismatch: bash=%d gosh=%d", bash.code, gosh.code)
 	}
@@ -272,7 +272,7 @@ func TestDifferentialHistoryCmdhist(t *testing.T) {
 			bashFile := filepath.Join(t.TempDir(), "bash-history")
 			goshFile := filepath.Join(t.TempDir(), "gosh-history")
 			want := runInteractiveHistory(t, "bash", "", []string{"--noprofile", "--norc", "-i"}, script, historyEnv(t, bashFile))
-			got := runInteractiveHistory(t, testGoshBinary, "gosh", []string{"-i", "--norc"}, script, historyEnv(t, goshFile))
+			got := runInteractiveHistory(t, testGoshBinary, "", []string{"-i", "--norc"}, script, historyEnv(t, goshFile))
 			if got.stdout != want.stdout {
 				t.Fatalf("history output mismatch:\nbash: %q (stderr %q)\ngosh: %q (stderr %q)", want.stdout, want.stderr, got.stdout, got.stderr)
 			}
@@ -341,7 +341,7 @@ func TestDifferentialHistoryCmdhistKnownDivergences(t *testing.T) {
 			bashFile := filepath.Join(t.TempDir(), "bash-history")
 			goshFile := filepath.Join(t.TempDir(), "gosh-history")
 			want := runInteractiveHistory(t, "bash", "", []string{"--noprofile", "--norc", "-i"}, script, historyEnv(t, bashFile))
-			got := runInteractiveHistory(t, testGoshBinary, "gosh", []string{"-i", "--norc"}, script, historyEnv(t, goshFile))
+			got := runInteractiveHistory(t, testGoshBinary, "", []string{"-i", "--norc"}, script, historyEnv(t, goshFile))
 			if got.stdout != want.stdout {
 				t.Fatalf("history output mismatch:\nbash: %q\ngosh: %q", want.stdout, got.stdout)
 			}
@@ -363,7 +363,7 @@ func TestDifferentialHistoryCmdhistOff(t *testing.T) {
 	bashFile := filepath.Join(t.TempDir(), "bash-history")
 	goshFile := filepath.Join(t.TempDir(), "gosh-history")
 	want := runInteractiveHistory(t, "bash", "", []string{"--noprofile", "--norc", "-i"}, script, historyEnv(t, bashFile))
-	got := runInteractiveHistory(t, testGoshBinary, "gosh", []string{"-i", "--norc"}, script, historyEnv(t, goshFile))
+	got := runInteractiveHistory(t, testGoshBinary, "", []string{"-i", "--norc"}, script, historyEnv(t, goshFile))
 	if got.stdout != want.stdout {
 		t.Fatalf("history output mismatch:\nbash: %q\ngosh: %q\ngosh stderr: %q", want.stdout, got.stdout, got.stderr)
 	}
@@ -374,7 +374,7 @@ func TestDifferentialHistoryLithist(t *testing.T) {
 	bashFile := filepath.Join(t.TempDir(), "bash-history")
 	goshFile := filepath.Join(t.TempDir(), "gosh-history")
 	want := runInteractiveHistory(t, "bash", "", []string{"--noprofile", "--norc", "-i"}, script, historyEnv(t, bashFile))
-	got := runInteractiveHistory(t, testGoshBinary, "gosh", []string{"-i", "--norc"}, script, historyEnv(t, goshFile))
+	got := runInteractiveHistory(t, testGoshBinary, "", []string{"-i", "--norc"}, script, historyEnv(t, goshFile))
 	if got.stdout != want.stdout {
 		t.Fatalf("history output mismatch:\nbash: %q\ngosh: %q\ngosh stderr: %q", want.stdout, got.stdout, got.stderr)
 	}
@@ -388,7 +388,7 @@ func TestDifferentialHistoryLimits(t *testing.T) {
 		bashEnv := append(historyEnv(t, bashFile), "HISTSIZE=2")
 		goshEnv := append(historyEnv(t, goshFile), "HISTSIZE=2")
 		runInteractiveHistory(t, "bash", "", []string{"--noprofile", "--norc", "-i"}, script, bashEnv)
-		runInteractiveHistory(t, testGoshBinary, "gosh", []string{"-i", "--norc"}, script, goshEnv)
+		runInteractiveHistory(t, testGoshBinary, "", []string{"-i", "--norc"}, script, goshEnv)
 		bashData, err := os.ReadFile(bashFile)
 		if err != nil {
 			t.Fatal(err)
@@ -419,7 +419,7 @@ func TestDifferentialHistoryLimits(t *testing.T) {
 		bashEnv := append(historyEnv(t, bashFile), "HISTFILESIZE=3")
 		goshEnv := append(historyEnv(t, goshFile), "HISTFILESIZE=3")
 		runInteractiveHistory(t, "bash", "", []string{"--noprofile", "--norc", "-i"}, script, bashEnv)
-		runInteractiveHistory(t, testGoshBinary, "gosh", []string{"-i", "--norc"}, script, goshEnv)
+		runInteractiveHistory(t, testGoshBinary, "", []string{"-i", "--norc"}, script, goshEnv)
 		bashData, err := os.ReadFile(bashFile)
 		if err != nil {
 			t.Fatal(err)
@@ -447,7 +447,7 @@ func TestDifferentialHistoryLimits(t *testing.T) {
 		bashEnv := append(historyEnv(t, bashFile), "HISTFILESIZE=0")
 		goshEnv := append(historyEnv(t, goshFile), "HISTFILESIZE=0")
 		runInteractiveHistory(t, "bash", "", []string{"--noprofile", "--norc", "-i"}, script, bashEnv)
-		runInteractiveHistory(t, testGoshBinary, "gosh", []string{"-i", "--norc"}, script, goshEnv)
+		runInteractiveHistory(t, testGoshBinary, "", []string{"-i", "--norc"}, script, goshEnv)
 		bashData, err := os.ReadFile(bashFile)
 		if err != nil {
 			t.Fatal(err)
@@ -645,7 +645,7 @@ func TestDifferentialHistoryBuiltin(t *testing.T) {
 			bashDir := t.TempDir()
 			goshDir := t.TempDir()
 			want := runDifferentialShell(t, "bash", []string{"--noprofile", "--norc", "-c", tc.script}, nil, env, bashDir)
-			got := runDifferentialShell(t, testGoshBinary, []string{"gosh", "-c", tc.script}, nil, env, goshDir)
+			got := runDifferentialShell(t, testGoshBinary, []string{"-c", tc.script}, nil, env, goshDir)
 			if got.code != want.code {
 				t.Fatalf("exit code mismatch: bash=%d gosh=%d\nbash stdout: %q\ngosh stdout: %q\ngosh stderr: %q",
 					want.code, got.code, want.stdout, got.stdout, got.stderr)
@@ -729,7 +729,7 @@ func TestDifferentialHistoryBuiltinKnownDivergences(t *testing.T) {
 			bashDir := t.TempDir()
 			goshDir := t.TempDir()
 			want := runDifferentialShell(t, "bash", []string{"--noprofile", "--norc", "-c", tc.script}, nil, env, bashDir)
-			got := runDifferentialShell(t, testGoshBinary, []string{"gosh", "-c", tc.script}, nil, env, goshDir)
+			got := runDifferentialShell(t, testGoshBinary, []string{"-c", tc.script}, nil, env, goshDir)
 			if got.code != want.code || got.stdout != want.stdout {
 				t.Fatalf("mismatch:\nbash: rc=%d stdout=%q\ngosh: rc=%d stdout=%q stderr=%q",
 					want.code, want.stdout, got.code, got.stdout, got.stderr)

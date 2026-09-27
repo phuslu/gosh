@@ -388,7 +388,7 @@ func TestFormatHistoryEntriesLithist(t *testing.T) {
 // explicit file, /dev/null, the $HOME/.gosh_history default, and no HOME.
 func TestInteractiveHistoryFileResolution(t *testing.T) {
 	run := func(env []string, stdin string) error {
-		cmd := exec.Command(testGoshBinary, "gosh", "-i", "--norc")
+		cmd := exec.Command(testGoshBinary, "-i", "--norc")
 		cmd.Stdin = strings.NewReader(stdin)
 		cmd.Env = env
 		var stdout, stderr bytes.Buffer

@@ -133,7 +133,8 @@ func New(c Config) (*Shell, error) {
 		return nil, err
 	}
 	s.command = command
-	hasCommand := command != nil && command.isCommand
+	// A command string or script file is never interactive, like Bash.
+	hasCommand := command.isCommand || command.scriptFile != ""
 	s.interactive = (c.IsTerminal || command.interactive) && !hasCommand
 	if command.showVersion {
 		fmt.Fprintf(s.stdout, "gosh %s\n", s.version)
@@ -225,6 +226,13 @@ func (s *Shell) initialize() error {
 	}
 	s.runner = runner
 	installShellOptionVariable(runner, s.version)
+	if s.interactive {
+		// Non-interactive runs apply these after resetting the runner; an
+		// interactive shell never resets, so the startup file sees them.
+		if err := s.applySetArgs(); err != nil {
+			return err
+		}
+	}
 
 	// Default key bindings. Home/End in their various encodings (\e[1~, \e[4~,
 	// \e[H, \e[F, \eOH, \eOF) are already decoded by the readline terminal, so
@@ -292,18 +300,46 @@ func (s *Shell) Run(ctx context.Context) error {
 	switch {
 	case s.command.isCommand:
 		return s.runCommand(ctx)
+	case s.command.scriptFile != "":
+		return s.runScriptFile(ctx)
 	case s.interactive:
 		return s.runInteractive(ctx)
 	default:
-		s.runner.Reset()
-		s.opts.reset(s.interactive)
-		if len(s.command.params) != 0 {
-			s.runner.Params = append([]string(nil), s.command.params...)
-		} else {
-			s.runner.Params = nil
+		if err := s.resetForInvocation(); err != nil {
+			return err
 		}
 		return runNonInteractiveStream(ctx, s.stdin, s.runner, s.stdout, s.stderr)
 	}
+}
+
+// resetForInvocation prepares the runner for one non-interactive
+// invocation: the command-line shell options and positional parameters
+// apply on top of a freshly reset interpreter.
+func (s *Shell) resetForInvocation() error {
+	s.runner.Reset()
+	s.opts.reset(s.interactive)
+	if err := s.applySetArgs(); err != nil {
+		return err
+	}
+	if len(s.command.params) != 0 {
+		s.runner.Params = append([]string(nil), s.command.params...)
+	} else {
+		s.runner.Params = nil
+	}
+	return nil
+}
+
+// applySetArgs applies the "set"-style options from the command line, such
+// as -e or -o pipefail, and mirrors them into the shopt/$- option state.
+func (s *Shell) applySetArgs() error {
+	if len(s.command.setArgs) == 0 {
+		return nil
+	}
+	if err := interp.Params(s.command.setArgs...)(s.runner); err != nil {
+		return &usageError{msg: "gosh: " + err.Error()}
+	}
+	s.opts.recordSet(s.command.setArgs)
+	return nil
 }
 
 // Eval parses and evaluates script in the Shell's interpreter, preserving
@@ -345,12 +381,26 @@ func (s *Shell) runCommand(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	s.runner.Reset()
-	s.opts.reset(s.interactive)
-	if len(s.command.params) != 0 {
-		s.runner.Params = append([]string(nil), s.command.params...)
-	} else {
-		s.runner.Params = nil
+	if err := s.resetForInvocation(); err != nil {
+		return err
+	}
+	return s.runner.Run(ctx, prog)
+}
+
+// runScriptFile runs "gosh script [args...]": $0 is the script path and the
+// shell's own stdin stays available to the script's commands.
+func (s *Shell) runScriptFile(ctx context.Context) error {
+	file, err := os.Open(s.command.scriptFile)
+	if err != nil {
+		return fmt.Errorf("gosh: %w", err)
+	}
+	defer file.Close()
+	prog, err := s.parser.Parse(file, s.command.scriptFile)
+	if err != nil {
+		return err
+	}
+	if err := s.resetForInvocation(); err != nil {
+		return err
 	}
 	return s.runner.Run(ctx, prog)
 }

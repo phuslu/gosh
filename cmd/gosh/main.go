@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 
 	"github.com/phuslu/gosh"
@@ -23,6 +25,11 @@ func main() {
 		OnPromptReset: func(_ context.Context) { pty.EnableVirtualTerminal(true, false, false) },
 	})
 	if err != nil {
+		// Exit statuses were already reported by the command that failed,
+		// and a cancelled context means gosh was told to stop.
+		if !gosh.IsExitStatus(err) && !errors.Is(err, context.Canceled) {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		os.Exit(gosh.ExitCode(err))
 	}
 }

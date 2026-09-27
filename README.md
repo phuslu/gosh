@@ -27,6 +27,13 @@ Run a one-shot command:
 ./gosh -c 'name=gosh; for n in 1 2 3; do printf "%s:%s\n" "$name" "$n"; done'
 ```
 
+Run a script file with positional parameters, optionally with `set`-style
+options such as `-e`, `-u`, `-x` or `-o pipefail`:
+
+```sh
+./gosh -eu ./build.sh release
+```
+
 Run a script from standard input:
 
 ```sh
