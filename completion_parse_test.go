@@ -25,6 +25,14 @@ func TestParseCompletionContextGolden(t *testing.T) {
 			want: completionContext{command: "cmd", words: []string{"cmd"}, cword: 1},
 		},
 		{
+			in:   `ls a\ `,
+			want: completionContext{prefix: "a ", command: "ls", words: []string{"ls"}, cword: 1, inWord: true},
+		},
+		{
+			in:   `ls a\\ `,
+			want: completionContext{command: "ls", words: []string{"ls", `a\`}, cword: 2},
+		},
+		{
 			in:   "cmd arg",
 			want: completionContext{prefix: "arg", command: "cmd", words: []string{"cmd"}, cword: 1, inWord: true},
 		},
@@ -213,6 +221,14 @@ func TestParseCompletionContextRedirectsAndSubstitutions(t *testing.T) {
 		{
 			in:   "echo a 2> ",
 			want: completionContext{command: "echo", words: []string{"echo", "a"}, cword: 2},
+		},
+		{
+			in:   "echo a > fo",
+			want: completionContext{prefix: "fo", command: "echo", words: []string{"echo", "a"}, cword: 2, inWord: true},
+		},
+		{
+			in:   `cat < 'my fi`,
+			want: completionContext{prefix: "my fi", quote: '\'', command: "cat", words: []string{"cat"}, cword: 1, inWord: true},
 		},
 		{
 			in:   "echo @(foo ",

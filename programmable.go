@@ -85,10 +85,15 @@ func (r *completionRegistry) sortedSpecs() []string {
 	return commands
 }
 
-func (r *completionRegistry) begin(spec *completionSpec, command string, words []string, cword int) {
+// begin starts one completion attempt and returns the spec it runs with: a
+// copy of the registered one, so that compopt inside a completion function
+// only changes the options for this attempt, as in Bash.
+func (r *completionRegistry) begin(spec *completionSpec, command string, words []string, cword int) *completionSpec {
+	active := *spec
 	r.mu.Lock()
-	r.active = &completionInvocation{spec: spec, command: command, words: words, cword: cword}
+	r.active = &completionInvocation{spec: &active, command: command, words: words, cword: cword}
 	r.mu.Unlock()
+	return &active
 }
 
 func (r *completionRegistry) end() {
@@ -429,11 +434,20 @@ func completionFunctionScript(spec *completionSpec, command string, words []stri
 	}
 	b.WriteString(")\n")
 	fmt.Fprintf(&b, "COMP_CWORD=%d\nCOMP_LINE=%s\nCOMP_POINT=%d\n", cword, shellSingleQuote(line), point)
-	fmt.Fprintf(&b, "COMPREPLY=()\n%s", shellSingleQuote(spec.funcName))
-	for _, word := range words {
-		b.WriteByte(' ')
-		b.WriteString(shellSingleQuote(word))
+	// Like Bash, the function gets the command name, the word being
+	// completed and the word before it.
+	if command == "" && len(words) > 0 {
+		command = words[0]
 	}
+	var cur, prev string
+	if cword >= 0 && cword < len(words) {
+		cur = words[cword]
+	}
+	if cword > 0 && cword <= len(words) {
+		prev = words[cword-1]
+	}
+	fmt.Fprintf(&b, "COMPREPLY=()\n%s %s %s %s", shellSingleQuote(spec.funcName),
+		shellSingleQuote(command), shellSingleQuote(cur), shellSingleQuote(prev))
 	fmt.Fprintf(&b, "\nprintf '%s'\n", programmableReplyMarker)
 	b.WriteString(`printf '%s\n' "${COMPREPLY[@]-}"` + "\n")
 	return b.String()
@@ -492,7 +506,7 @@ func (c *autoCompleter) programmableCompletion(ctx completionContext, line []run
 	if cword < 0 {
 		cword = 0
 	}
-	reg.begin(spec, ctx.command, words, cword)
+	spec = reg.begin(spec, ctx.command, words, cword)
 	defer reg.end()
 
 	var candidates []string

@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -83,6 +86,30 @@ func TestProgrammableCompletionFunctionVariables(t *testing.T) {
 	}
 }
 
+func TestProgrammableCompletionFunctionArguments(t *testing.T) {
+	c := newProgrammableCompleter(t, `
+		_complete_cmd() { COMPREPLY=("$#" "$1" "$2" "$3"); }
+	`)
+	c.completion.set("cmd", &completionSpec{funcName: "_complete_cmd"})
+
+	for _, tc := range []struct {
+		line string
+		want []string
+	}{
+		{"cmd aa bb", []string{"3", "cmd", "bb", "aa"}},
+		{"cmd aa ", []string{"3", "cmd", "", "aa"}},
+		{"cmd b", []string{"3", "cmd", "b", "cmd"}},
+	} {
+		ctx := parseCompletionContext([]rune(tc.line))
+		result := c.programmableCompletion(ctx, []rune(tc.line), len(tc.line))
+		// Empty replies are dropped, like the empty COMPREPLY entries.
+		want := slices.DeleteFunc(slices.Clone(tc.want), func(s string) bool { return s == "" })
+		if !reflect.DeepEqual(result.candidates, want) {
+			t.Fatalf("%q: candidates = %#v, want %#v\nstderr: %s", tc.line, result.candidates, want, c.stderr)
+		}
+	}
+}
+
 func TestProgrammableCompletionWordList(t *testing.T) {
 	c := newProgrammableCompleter(t, "")
 	c.completion.set("greet", &completionSpec{words: []string{"help", "other"}})
@@ -110,6 +137,9 @@ func TestProgrammableCompletionCompopt(t *testing.T) {
 	}
 	if !result.noSpace {
 		t.Fatalf("compopt -o nospace did not reach the completion invocation\nstderr: %s", c.stderr)
+	}
+	if c.completion.spec("cmd").options.nospace {
+		t.Fatal("compopt -o nospace changed the registered spec, want only this invocation")
 	}
 }
 
@@ -237,5 +267,30 @@ func TestApplyCompletionOptionsUnrelatedCandidates(t *testing.T) {
 				t.Fatalf("candidates listed = %v, want %v (output %q)", listed, test.listed, stdout.String())
 			}
 		})
+	}
+}
+
+func TestCompletionEscapedSpaceAndRedirectPrefix(t *testing.T) {
+	c := newProgrammableCompleter(t, "")
+	dir := t.TempDir()
+	for _, name := range []string{"a b.txt", "foo.txt", "far.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.runner.Dir = dir
+
+	for _, tc := range []struct {
+		line string
+		want string
+	}{
+		{`ls a\ `, `b.txt `},
+		{`echo x > fo`, `o.txt `},
+		{`cat < fa`, `r.txt `},
+	} {
+		got, _ := c.Do([]rune(tc.line), len([]rune(tc.line)))
+		if len(got) != 1 || string(got[0]) != tc.want {
+			t.Fatalf("Do(%q) = %q, want one completion %q", tc.line, got, tc.want)
+		}
 	}
 }

@@ -99,7 +99,12 @@ func completionFreshPosition(src string) bool {
 		return true
 	}
 	if unicode.IsSpace(r) {
-		return true
+		// A backslash-escaped space belongs to the word before it.
+		backslashes := 0
+		for i := len(src) - utf8.RuneLen(r) - 1; i >= 0 && src[i] == '\\'; i-- {
+			backslashes++
+		}
+		return backslashes%2 == 0
 	}
 	switch r {
 	case '|', '&', ';', '<', '>', '(', '{':
@@ -555,9 +560,17 @@ func completionContextFromCall(call *syntax.CallExpr, curWord *syntax.Word, src 
 		}
 	}
 	if !containsCursor {
-		// A redirect word follows the command; it is a fresh argument slot.
+		// A redirect word follows the command; it is a fresh argument slot
+		// whose prefix is whatever was typed of the redirect target.
 		words := completionCallWords(call, src, len(call.Args))
-		ctx := completionContext{words: words, cword: len(words)}
+		prefix, quote := completionWordPrefix(curWord, src, cursor)
+		ctx := completionContext{
+			prefix: prefix,
+			quote:  quote,
+			words:  words,
+			cword:  len(words),
+			inWord: int(curWord.Pos().Offset()) != cursor,
+		}
 		if len(call.Args) == 0 {
 			ctx.isCommand = true
 		} else {
