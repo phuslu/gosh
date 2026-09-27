@@ -1,7 +1,6 @@
 package gosh
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -36,65 +35,6 @@ func runInteractiveParser(parser *syntax.Parser, r io.Reader, run func([]*syntax
 			return seqErr
 		}
 	}
-}
-
-func runNonInteractiveStream(ctx context.Context, r io.Reader, runner *interp.Runner, stdout, stderr io.Writer) error {
-	src, err := openScriptSource(r)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	stdin, err := src.StdinFile()
-	if err != nil {
-		return err
-	}
-	data := src.Data()
-	var runErr error
-	var lastStatus error
-	for offset := 0; offset < len(data); {
-		stmts, next, err := parseNextStatements(data, offset)
-		if err != nil {
-			return err
-		}
-		if next <= offset {
-			break
-		}
-		if _, err := stdin.Seek(int64(next), io.SeekStart); err != nil {
-			return err
-		}
-		if err := interp.StdIO(stdin, stdout, stderr)(runner); err != nil {
-			return err
-		}
-		for _, stmt := range stmts {
-			err := runner.Run(ctx, stmt)
-			if err == nil {
-				lastStatus = nil
-			} else {
-				var status interp.ExitStatus
-				if errors.As(err, &status) {
-					lastStatus = err
-				} else {
-					runErr = err
-					break
-				}
-			}
-			if runner.Exited() {
-				break
-			}
-		}
-		pos, seekErr := stdin.Seek(0, io.SeekCurrent)
-		if seekErr != nil {
-			return seekErr
-		}
-		offset = int(pos)
-		if runErr != nil {
-			return runErr
-		}
-		if runner.Exited() {
-			return lastStatus
-		}
-	}
-	return lastStatus
 }
 
 // runInteractiveStatements runs one line of interactive input. A signal on
@@ -166,40 +106,6 @@ func watchInterrupts(ctx context.Context, sigs <-chan os.Signal) (context.Contex
 		close(done)
 		cancel()
 	}
-}
-
-func parseNextStatements(data []byte, offset int) ([]*syntax.Stmt, int, error) {
-	for next := offset; next < len(data); {
-		if idx := bytes.IndexByte(data[next:], '\n'); idx >= 0 {
-			next += idx + 1
-		} else {
-			next = len(data)
-		}
-		var out []*syntax.Stmt
-		parser := syntax.NewParser()
-		var err error
-		for stmts, seqErr := range parser.InteractiveSeq(bytes.NewReader(data[offset:next])) {
-			if seqErr != nil {
-				err = seqErr
-				break
-			}
-			if parser.Incomplete() {
-				continue
-			}
-			out = append(out, stmts...)
-			break
-		}
-		if err != nil {
-			if parser.Incomplete() || next < len(data) {
-				continue
-			}
-			return nil, next, err
-		}
-		if !parser.Incomplete() {
-			return out, next, nil
-		}
-	}
-	return nil, len(data), io.ErrUnexpectedEOF
 }
 
 // reader adapts *readline.Instance to the io.Reader interface expected by

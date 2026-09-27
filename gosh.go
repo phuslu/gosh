@@ -307,10 +307,7 @@ func (s *Shell) Run(ctx context.Context) error {
 	case s.interactive:
 		return s.runInteractive(ctx)
 	default:
-		if err := s.resetForInvocation(); err != nil {
-			return err
-		}
-		return runNonInteractiveStream(ctx, s.stdin, s.runner, s.stdout, s.stderr)
+		return s.runStdinScript(ctx)
 	}
 }
 
@@ -384,18 +381,10 @@ func (s *Shell) Interactive(ctx context.Context) error {
 }
 
 func (s *Shell) runCommand(ctx context.Context) error {
-	script := s.command.script
-	if !strings.HasSuffix(script, "\n") {
-		script += "\n"
-	}
-	prog, err := s.parser.Parse(strings.NewReader(script), s.command.argv0)
-	if err != nil {
-		return err
-	}
 	if err := s.resetForInvocation(); err != nil {
 		return err
 	}
-	return s.runner.Run(ctx, prog)
+	return s.runScript(ctx, newScriptReader(strings.NewReader(s.command.script)), s.command.argv0)
 }
 
 // runScriptFile runs "gosh script [args...]": $0 is the script path and the
@@ -406,14 +395,27 @@ func (s *Shell) runScriptFile(ctx context.Context) error {
 		return fmt.Errorf("gosh: %w", err)
 	}
 	defer file.Close()
-	prog, err := s.parser.Parse(file, s.command.scriptFile)
-	if err != nil {
-		return err
-	}
 	if err := s.resetForInvocation(); err != nil {
 		return err
 	}
-	return s.runner.Run(ctx, prog)
+	return s.runScript(ctx, newScriptReader(file), s.command.scriptFile)
+}
+
+// runStdinScript runs the script read from stdin, which is also the stdin
+// of the script's commands.
+func (s *Shell) runStdinScript(ctx context.Context) error {
+	stdin, closeStdin, err := scriptStdin(s.stdin)
+	if err != nil {
+		return err
+	}
+	defer closeStdin()
+	if err := s.resetForInvocation(); err != nil {
+		return err
+	}
+	if err := interp.StdIO(stdin, s.stdout, s.stderr)(s.runner); err != nil {
+		return err
+	}
+	return s.runScript(ctx, newSharedScriptReader(stdin), "")
 }
 
 func (s *Shell) runInteractive(ctx context.Context) error {
