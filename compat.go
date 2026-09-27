@@ -19,6 +19,7 @@ type callDeps struct {
 	bindings   *keyBindingManager
 	completion *completionRegistry
 	opts       *shellOptions
+	aliases    *aliasTable
 }
 
 // Sentinel command names. The call middleware rewrites an intercepted builtin
@@ -60,6 +61,8 @@ var compatBuiltins = map[string]compatBuiltin{
 	"complete": {shadowable: true, rewrite: callDeps.rewriteComplete},
 	"compgen":  {shadowable: true, rewrite: callDeps.rewriteCompgen},
 	"compopt":  {shadowable: true, rewrite: callDeps.rewriteCompopt},
+	"alias":    {shadowable: true, rewrite: callDeps.rewriteAlias},
+	"unalias":  {shadowable: true, rewrite: callDeps.rewriteUnalias},
 	"set":      {rewrite: callDeps.rewriteSet},
 	"history":  {rewrite: callDeps.rewriteHistory},
 	"fc":       {rewrite: callDeps.rewriteFc},

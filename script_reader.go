@@ -176,6 +176,7 @@ func (s *Shell) runScript(ctx context.Context, r *scriptReader, name string) err
 		if err := r.sync(); err != nil {
 			return err
 		}
+		s.expandAliases(stmts...)
 		// Running a File rather than bare statements keeps $0 set to name.
 		err := s.runner.Run(ctx, &syntax.File{Name: name, Stmts: stmts})
 		var status interp.ExitStatus

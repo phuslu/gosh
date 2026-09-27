@@ -155,6 +155,19 @@ hi 2>/dev/null; echo "$?"; shopt -q expand_aliases; echo "$?"`},
 		{"aliases-opt-in", `shopt -s expand_aliases
 alias hi='echo alias'
 hi`},
+		{"aliases-nested", `shopt -s expand_aliases
+alias say='printf "<%s>\n"' ll='say -lF' again='ll'
+ll x; again y; f() { ll z; }; f; echo $(ll sub)`},
+		{"aliases-self-reference", `shopt -s expand_aliases
+alias echo='echo pre' loop1='loop2 a' loop2='loop1 b'
+echo x; loop1 2>/dev/null; echo "$?"`},
+		{"aliases-trailing-blank", `shopt -s expand_aliases
+alias run='command ' twice='run run ' say='echo said'
+run say 1; twice say 2; run 'say' 3 2>/dev/null; echo "$?"`},
+		{"aliases-unalias-all", `shopt -s expand_aliases
+alias a='echo a' b='echo b'
+unalias -a
+a 2>/dev/null; echo "$?"; alias`},
 		{"heredoc", `cat <<EOF
 one
 two

@@ -91,6 +91,7 @@ type Shell struct {
 	bindings    *keyBindingManager
 	completion  *completionRegistry
 	opts        *shellOptions
+	aliases     *aliasTable
 	promptCache *promptCache
 	rl          *readline.Instance
 
@@ -210,6 +211,7 @@ func (s *Shell) initialize() error {
 	s.bindings = &keyBindingManager{entries: make(map[string]*goKeyBindingEntry)}
 	s.completion = newCompletionRegistry()
 	s.opts = newShellOptions(s.interactive)
+	s.aliases = newAliasTable()
 	s.promptCache = newPromptCache()
 
 	deps := callDeps{
@@ -218,6 +220,7 @@ func (s *Shell) initialize() error {
 		bindings:   s.bindings,
 		completion: s.completion,
 		opts:       s.opts,
+		aliases:    s.aliases,
 	}
 	opts = append(opts, interp.CallHandler(callHandler(deps)))
 	opts = append(opts, interp.ExecHandlers(execHandler(deps, backendExec(s.cfg.Backend))))
@@ -317,6 +320,7 @@ func (s *Shell) Run(ctx context.Context) error {
 func (s *Shell) resetForInvocation() error {
 	s.runner.Reset()
 	s.opts.reset(s.interactive)
+	s.aliases.reset()
 	if err := s.applySetArgs(); err != nil {
 		return err
 	}
@@ -354,7 +358,19 @@ func (s *Shell) Eval(ctx context.Context, script string) error {
 	if err != nil {
 		return err
 	}
+	s.expandAliases(prog.Stmts...)
 	return s.runner.Run(ctx, prog)
+}
+
+// expandAliases applies Bash's recursive alias expansion to freshly parsed
+// code when alias expansion is on; see aliasTable.
+func (s *Shell) expandAliases(stmts ...*syntax.Stmt) {
+	if on, _ := s.opts.enabled(false, "expand_aliases"); !on {
+		return
+	}
+	for _, stmt := range stmts {
+		s.aliases.expand(stmt)
+	}
 }
 
 // Interactive starts the readline-driven interactive frontend on the
@@ -569,6 +585,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 		}
 
 		rdr.savePendingHistory()
+		s.expandAliases(stmts...)
 		cont, err := runInteractiveStatements(ctx, s.runner, stmts, rl.Stderr(), interrupts)
 		if !cont {
 			exitErr = err
