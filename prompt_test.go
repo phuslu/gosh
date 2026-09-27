@@ -50,6 +50,13 @@ func TestPromptEscapes(t *testing.T) {
 		{"escape", `\e`, "\x1b"},
 		{"newline", `\n`, "\n"},
 		{"carriage return", `\r`, "\r"},
+		{"octal escape", `\033[1mX`, "\x1b[1mX"},
+		{"octal escape in non printing", `\[\033[0m\]$`, "\x1b[0m$"},
+		{"octal escape stops after three digits", `\1234`, "S4"},
+		{"octal escape truncated to a byte", `\541`, "a"},
+		{"octal escape at the end may be short", `\41`, "!"},
+		{"short octal escape keeps its backslash", `\33x\1b`, "\\33x\\1b"},
+		{"octal nul is dropped", `a\000b\400c\0`, "abc"},
 		// \[ and \] delimit non-printing sequences; the characters between
 		// them are kept, only the markers themselves disappear.
 		{"non printing markers", `a\[b\]c`, "abc"},

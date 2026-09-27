@@ -339,6 +339,28 @@ func (t *promptTemplate) parse() {
 				i += 2
 				continue
 			}
+			if isOctalDigit(next) {
+				// \nnn is the byte with octal value nnn, truncated to a byte.
+				// Like Bash, all three characters must be octal digits, except
+				// that the string may end first; otherwise the backslash is
+				// kept literally. A NUL byte is dropped, since Bash's prompt
+				// strings cannot hold one.
+				digits := t.src[i+1 : min(i+4, len(t.src))]
+				if strings.IndexFunc(digits, func(r rune) bool { return !isOctalDigit(byte(r)) }) >= 0 {
+					t.tokens = append(t.tokens, promptToken{kind: promptTokenLiteral, text: "\\"})
+					i++
+					continue
+				}
+				value := 0
+				for j := range len(digits) {
+					value = value*8 + int(digits[j]-'0')
+				}
+				if b := byte(value); b != 0 {
+					t.tokens = append(t.tokens, promptToken{kind: promptTokenLiteral, text: string([]byte{b})})
+				}
+				i += 1 + len(digits)
+				continue
+			}
 			token := promptToken{kind: promptTokenEscape, escape: next}
 			if next == 'D' && i+2 < len(t.src) && t.src[i+2] == '{' {
 				if end := strings.IndexByte(t.src[i+3:], '}'); end >= 0 {
@@ -438,6 +460,10 @@ func (t *promptTemplate) render(state *promptState) string {
 	return b.String()
 }
 
+func isOctalDigit(c byte) bool {
+	return c >= '0' && c <= '7'
+}
+
 func scanPromptNonPrinting(src string, start int) (string, int) {
 	for i := start; i < len(src)-1; i++ {
 		if src[i] == '\\' && src[i+1] == ']' {
@@ -491,8 +517,6 @@ func renderPromptEscape(state *promptState, c byte, format string) string {
 		return "\\"
 	case '$':
 		return state.promptSymbol()
-	case '0':
-		return "\000"
 	case 'j':
 		return "0"
 	case 'v', 'V':
