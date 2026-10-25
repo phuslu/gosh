@@ -2,6 +2,7 @@ package gosh
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -47,6 +48,7 @@ const (
 	completeCommand = "__gosh_complete"
 	compgenCommand  = "__gosh_compgen"
 	compoptCommand  = "__gosh_compopt"
+	umaskCommand    = "__gosh_umask"
 	printfCommand   = "__gosh_printf"
 )
 
@@ -74,6 +76,7 @@ var compatBuiltins = map[string]compatBuiltin{
 	"alias":    {shadowable: true, rewrite: callDeps.rewriteAlias},
 	"unalias":  {shadowable: true, rewrite: callDeps.rewriteUnalias},
 	"trap":     {shadowable: true, rewrite: callDeps.rewriteTrap},
+	"umask":    {shadowable: true, rewrite: sentinelRewrite(umaskCommand)},
 	"set":      {rewrite: callDeps.rewriteSet},
 	"history":  {rewrite: callDeps.rewriteHistory},
 	"fc":       {rewrite: callDeps.rewriteFc},
@@ -334,6 +337,13 @@ func (d callDeps) rewriteKillNewgrp(ctx context.Context, argv []string) ([]strin
 	return next, true
 }
 
+// sentinelRewrite rewrites a builtin into the sentinel name unconditionally.
+func sentinelRewrite(name string) func(d callDeps, ctx context.Context, argv []string) ([]string, bool) {
+	return func(d callDeps, ctx context.Context, argv []string) ([]string, bool) {
+		return sentinelArgs(name, argv[1:]), true
+	}
+}
+
 func sentinelArgs(name string, args []string) []string {
 	next := make([]string, 1, len(args)+1)
 	next[0] = name
@@ -344,6 +354,9 @@ func sentinelArgs(name string, args []string) []string {
 // into sentinel commands. Returning an error is how a builtin reports a
 // non-zero exit status; interp.ExitStatus values pass through unchanged.
 var sentinelBuiltins = map[string]func(ctx context.Context, d callDeps, args []string) error{
+	umaskCommand: func(ctx context.Context, d callDeps, args []string) error {
+		return builtinStatus(ctx, builtinUmask(args, interp.HandlerCtx(ctx).Stdout))
+	},
 	printfCommand: func(ctx context.Context, d callDeps, args []string) error {
 		hc := interp.HandlerCtx(ctx)
 		out, failed := runShellPrintf(hc.Stderr, args, d.start)
@@ -383,14 +396,27 @@ var sentinelBuiltins = map[string]func(ctx context.Context, d callDeps, args []s
 }
 
 // builtinStatus turns a builtin's Go error into the exit status Bash would
-// report. Usage errors still exit 1 rather than Bash's 2; aligning those is
-// separate work.
+// report: 2 for a builtinUsageError, 1 otherwise.
 func builtinStatus(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
 	fmt.Fprintln(interp.HandlerCtx(ctx).Stderr, err)
+	var usage builtinUsageError
+	if errors.As(err, &usage) {
+		return interp.ExitStatus(2)
+	}
 	return interp.ExitStatus(1)
+}
+
+// builtinUsageError is a builtin's error for invalid options or arguments,
+// which like Bash exits with status 2.
+type builtinUsageError string
+
+func (e builtinUsageError) Error() string { return string(e) }
+
+func builtinUsagef(format string, args ...any) error {
+	return builtinUsageError(fmt.Sprintf(format, args...))
 }
 
 func backendExec(backend Backend) interp.ExecHandlerFunc {
