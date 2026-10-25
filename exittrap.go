@@ -128,6 +128,10 @@ func statusStmt(status int) *syntax.Stmt {
 	return parseStmt(fmt.Sprintf("(exit %d) 2>&- && : 2>&-", status))
 }
 
+// eofExitStmt ends an interactive shell at the end of its input. "builtin"
+// skips any function named exit, and closing stderr keeps xtrace quiet.
+var eofExitStmt = parseStmt("builtin exit 2>&-")
+
 func parseStmt(src string) *syntax.Stmt {
 	prog, err := syntax.NewParser().Parse(strings.NewReader(src), "")
 	if err != nil {

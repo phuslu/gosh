@@ -199,3 +199,20 @@ func TestInteractiveShellExpandsAliases(t *testing.T) {
 		})
 	}
 }
+
+func TestInteractiveEOFRunsExitTrap(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args:   []string{"gosh", "-i", "--norc"},
+		Stdin:  strings.NewReader("trap 'echo bye:$?' EXIT\nexit() { echo function; }\nfalse\n"),
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Env:    testEnv(t),
+	})
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit code = %d, want 1 (err: %v)\nstderr: %s", got, err, stderr.String())
+	}
+	if got, want := stdout.String(), "bye:1\n"; got != want {
+		t.Fatalf("stdout = %q, want %q\nstderr: %s", got, want, stderr.String())
+	}
+}

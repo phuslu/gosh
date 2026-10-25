@@ -620,6 +620,11 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 		resetPrompt()
 		return true
 	})
+	if err == nil && exitErr == nil && ctx.Err() == nil {
+		// Like Bash, the end of input runs "exit": the shell runs its EXIT
+		// trap and exits with the last command's status.
+		exitErr = s.runner.Run(ctx, eofExitStmt)
+	}
 	if s.history.fileDirty() {
 		if rewriteErr := s.history.RewriteFile(); rewriteErr != nil {
 			fmt.Fprintln(rl.Stderr(), "failed to rewrite history:", rewriteErr)
