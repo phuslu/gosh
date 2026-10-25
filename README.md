@@ -57,19 +57,25 @@ enabled
   loops, pipelines, redirects, command substitution, arithmetic, globbing, and
   shell builtins.
 - Interactive line editing with readline.
-- Command and path completion.
+- Command, path and `$variable` completion.
 - Prefix history search for the up/down arrow bindings.
 - Bash history expansion (`!!`, `!$`, `!n`, `!string`, `^old^new`, word
   designators and modifiers) in interactive shells, `set +H` to turn it off.
-- Bash prompt escape rendering for common `PS1` and `PS2` sequences.
-- `bind` support for common cursor and history-search actions.
+- Bash prompt escapes in `PS0`, `PS1` and `PS2`, including `\D{format}` and
+  `PROMPT_DIRTRIM`, and `PROMPT_COMMAND` (a string or an array).
+- `bind` with Bash's options, the readline functions for moving, editing,
+  searching and history, and `bind -x` key bindings to shell commands.
 - Bash-compatible history: `HISTFILE` (default `~/.gosh_history`),
   `HISTSIZE` (default 500), `HISTFILESIZE`, `HISTCONTROL`, `HISTIGNORE`,
   `HISTTIMEFORMAT`, and the `cmdhist`/`lithist`/`histappend` shopt options.
-- `shopt -q` compatibility, including `builtin shopt -q` and
+- `shopt -q` and `shopt -p` compatibility, including `builtin shopt -q` and
   `command shopt -q`.
-- Programmable completion via `complete`, `compgen`, and `compopt`, including
-  `COMP_WORDS`, `COMP_CWORD`, `COMP_LINE`, `COMP_POINT`, and `COMPREPLY`.
+- Bash's `printf` (with `-v`, `%q` and `%(fmt)T`), `umask` and `ulimit`, and
+  the `SECONDS`, `EPOCHSECONDS`, `EPOCHREALTIME` and `BASHPID` variables.
+- Programmable completion via `complete`, `compgen`, and `compopt` on Bash's
+  specification model: action flags, `-G`, `-W`, `-F`, `-C`, `-X`, the `-o`
+  options, `-D`/`-E`/`-I`, and `COMP_WORDS`, `COMP_CWORD`, `COMP_LINE`,
+  `COMP_POINT`, and `COMPREPLY`.
 - A replaceable execution/filesystem `Backend`, so the same shell can run
   against the host, a sandbox, a mock filesystem, or a remote executor.
 - `BASH_VERSION` compatibility variable and a `GOSH_INTERACTIVE` marker for
