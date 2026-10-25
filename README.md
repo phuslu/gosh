@@ -90,8 +90,8 @@ Example `~/.bashrc` or `GOSH_ENV` file:
 if [ -n "${GOSH_INTERACTIVE-}" ]; then
     bind '"\e[1~": beginning-of-line'
     bind '"\e[4~": end-of-line'
-    bind '"\e[5~": previous-screen'
-    bind '"\e[6~": next-screen'
+    bind '"\e[5~": previous-history'
+    bind '"\e[6~": next-history'
     bind '"\e[F": end-of-line'
     bind '"\e[H": beginning-of-line'
     bind '"\e[B": history-search-forward'

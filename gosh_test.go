@@ -510,7 +510,7 @@ func TestDefaultBindings(t *testing.T) {
 	if err := shell.bindings.handleBind(nil, &out); err != nil {
 		t.Fatalf("handleBind failed: %v", err)
 	}
-	want := `"\e[5~": previous-screen` + "\n" + `"\e[6~": next-screen` + "\n"
+	want := `"\e[5~": previous-history` + "\n" + `"\e[6~": next-history` + "\n"
 	if got := out.String(); got != want {
 		t.Fatalf("default bindings = %q, want %q", got, want)
 	}
@@ -556,12 +556,27 @@ func TestBindListing(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := m.handleBind([]string{"-P"}, &out); err != nil {
-		t.Fatalf("handleBind -P failed: %v", err)
+	if err := m.handleBind([]string{"-p"}, &out); err != nil {
+		t.Fatalf("handleBind -p failed: %v", err)
 	}
 	want := `"\C-a": beginning-of-line` + "\n" + `"\e[A": history-search-backward` + "\n"
 	if got := out.String(); got != want {
 		t.Fatalf("listing = %q, want %q", got, want)
+	}
+
+	out.Reset()
+	if err := m.handleBind([]string{"-P"}, &out); err != nil {
+		t.Fatalf("handleBind -P failed: %v", err)
+	}
+	for _, line := range []string{
+		`history-search-backward can be found on "\e[A".`,
+		`history-search-forward is not bound to any keys.`,
+		// \e[A no longer runs previous-history.
+		`previous-history can be found on "\C-p".`,
+	} {
+		if !strings.Contains(out.String(), line+"\n") {
+			t.Fatalf("bind -P = %q, want a line %q", out.String(), line)
+		}
 	}
 
 	out.Reset()
@@ -1560,5 +1575,51 @@ func TestKeyBindingInputDropsUnhandledCustomActions(t *testing.T) {
 				t.Fatalf("input = %#v, want %#v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestBindOptions(t *testing.T) {
+	m := &keyBindingManager{entries: make(map[string]*goKeyBindingEntry)}
+	inputrc := filepath.Join(t.TempDir(), "inputrc")
+	if err := os.WriteFile(inputrc, []byte("# comment\nset completion-ignore-case on\n$if Bash\n\"\\C-x\": backward-word\n$endif\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) (string, error) {
+		var out bytes.Buffer
+		err := m.handleBind(args, &out)
+		return out.String(), err
+	}
+	if _, err := run("-f", inputrc, "set bell-style none", `"\C-o": forward-word`); err != nil {
+		t.Fatalf("bind -f failed: %v", err)
+	}
+	if got, err := run("-q", "backward-word"); err != nil || got != `backward-word can be invoked via "\eb", "\C-x".`+"\n" {
+		t.Fatalf("bind -q backward-word = %q, %v", got, err)
+	}
+	if _, err := run("-u", "backward-word", "-r", `\C-o`); err != nil {
+		t.Fatalf("bind -u/-r failed: %v", err)
+	}
+	if got, err := run("-p"); err != nil || got != "" {
+		t.Fatalf("bind -p after unbinding = %q, %v", got, err)
+	}
+	if got, err := run("-q", "history-search-forward"); ExitCode(err) != 1 || got != "history-search-forward is not bound to any keys.\n" {
+		t.Fatalf("bind -q unbound = %q, %v", got, err)
+	}
+	if _, err := run("-q", "no-such-function"); err == nil || !strings.Contains(err.Error(), "unknown function name") {
+		t.Fatalf("bind -q unknown = %v", err)
+	}
+	if _, err := run("-z"); err == nil || !strings.Contains(err.Error(), "invalid option") {
+		t.Fatalf("bind -z = %v", err)
+	}
+	if got, err := run("-l"); err != nil || !strings.Contains(got, "unix-word-rubout\n") {
+		t.Fatalf("bind -l = %q, %v", got, err)
+	}
+
+	// A function readline runs from an escape sequence gets that sequence.
+	if _, err := run(`"\C-x": backward-word`); err != nil {
+		t.Fatal(err)
+	}
+	in := &keyBindingInput{src: strings.NewReader("a\x18b"), mgr: m}
+	if got, err := io.ReadAll(in); err != nil || string(got) != "a\x1bbb" {
+		t.Fatalf("input = %q, %v", got, err)
 	}
 }

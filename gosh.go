@@ -253,8 +253,8 @@ func (s *Shell) initialize() error {
 	// \e[H, \e[F, \eOH, \eOF) are already decoded by the readline terminal, so
 	// only PageUp/PageDown need a binding here.
 	for _, binding := range []string{
-		`"\e[5~": previous-screen`,
-		`"\e[6~": next-screen`,
+		`"\e[5~": previous-history`,
+		`"\e[6~": next-history`,
 	} {
 		if err := s.bindings.handleBind([]string{binding}, io.Discard); err != nil {
 			return err

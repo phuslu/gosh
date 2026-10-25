@@ -3,13 +3,11 @@
 package gosh
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"math"
 	"reflect"
 	"strconv"
-	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -181,14 +179,4 @@ func setUlimit(res ulimitResource, value string, soft, hard bool) error {
 		return fmt.Errorf("ulimit: %s: cannot modify limit: %s", res.description, strerror(err))
 	}
 	return nil
-}
-
-// strerror describes err like C's strerror, which starts with a capital.
-func strerror(err error) string {
-	msg := err.Error()
-	var errno unix.Errno
-	if errors.As(err, &errno) && msg != "" {
-		msg = strings.ToUpper(msg[:1]) + msg[1:]
-	}
-	return msg
 }

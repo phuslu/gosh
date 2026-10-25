@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"mvdan.cc/sh/v3/interp"
@@ -450,4 +451,14 @@ func execHandler(deps callDeps, execBackend interp.ExecHandlerFunc) func(interp.
 			return next(ctx, args)
 		}
 	}
+}
+
+// strerror describes err like C's strerror, which starts with a capital.
+func strerror(err error) string {
+	msg := err.Error()
+	var errno syscall.Errno
+	if errors.As(err, &errno) && msg != "" {
+		msg = strings.ToUpper(msg[:1]) + msg[1:]
+	}
+	return msg
 }
