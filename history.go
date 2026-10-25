@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/pattern"
 )
 
 // historyConfig groups the settings derived from the history-related shell
@@ -33,6 +35,9 @@ type historyConfig struct {
 	fileLimit int
 	control   historyControl
 	file      string
+	// ignore is HISTIGNORE, a colon-separated list of patterns for lines
+	// not to remember.
+	ignore string
 }
 
 type history struct {
@@ -58,6 +63,7 @@ type history struct {
 type historyControl struct {
 	ignoreDups  bool
 	ignoreSpace bool
+	eraseDups   bool
 }
 
 // defaultHistoryLimit mirrors Bash's HISTSIZE default.
@@ -107,6 +113,7 @@ func shellHistoryConfig(runner *interp.Runner) historyConfig {
 	size, _ := runnerStringVar(runner, "HISTSIZE")
 	fileSize, _ := runnerStringVar(runner, "HISTFILESIZE")
 	control, _ := runnerStringVar(runner, "HISTCONTROL")
+	ignore, _ := runnerStringVar(runner, "HISTIGNORE")
 	file, _ := runnerStringVar(runner, "HISTFILE")
 	if file == os.DevNull || file == "/dev/null" {
 		file = ""
@@ -116,6 +123,7 @@ func shellHistoryConfig(runner *interp.Runner) historyConfig {
 		fileLimit:     parseHistoryLimit(fileSize),
 		control:       parseHistoryControl(control),
 		file:          file,
+		ignore:        ignore,
 	}
 }
 
@@ -176,6 +184,8 @@ func parseHistoryControl(val string) historyControl {
 		case "ignoreboth":
 			control.ignoreDups = true
 			control.ignoreSpace = true
+		case "erasedups":
+			control.eraseDups = true
 		}
 	}
 	return control
@@ -309,7 +319,18 @@ func (h *history) Add(line string) bool {
 		return false
 	}
 	h.mu.Lock()
-	if !h.controlAllowsLocked(line) || !h.appendLocked(line) {
+	if !h.controlAllowsLocked(line) {
+		h.mu.Unlock()
+		return false
+	}
+	if h.eraseDupsLocked(line) && h.resync != nil {
+		// Readline must forget the erased entries too; it learns about
+		// line from the caller.
+		h.mu.Unlock()
+		h.resync()
+		h.mu.Lock()
+	}
+	if !h.appendLocked(line) {
 		h.mu.Unlock()
 		return false
 	}
@@ -352,7 +373,66 @@ func (h *history) controlAllowsLocked(line string) bool {
 	if h.cfg.control.ignoreDups && len(h.entries) > 0 && h.entries[len(h.entries)-1] == line {
 		return false
 	}
-	return true
+	prev := ""
+	if len(h.entries) > 0 {
+		prev = h.entries[len(h.entries)-1]
+	}
+	return !historyIgnored(h.cfg.ignore, line, prev)
+}
+
+// historyIgnored reports whether line matches one of the HISTIGNORE
+// patterns in ignore. Patterns are separated by colons, which a backslash
+// escapes, must match the whole line, and "&" stands for prev, the previous
+// history entry.
+func historyIgnored(ignore, line, prev string) bool {
+	if ignore == "" {
+		return false
+	}
+	var pat strings.Builder
+	check := func() bool {
+		p := pat.String()
+		pat.Reset()
+		switch p {
+		case "":
+			return false
+		case "&":
+			return line == prev
+		}
+		expr, err := pattern.Regexp(p, pattern.EntireString)
+		if err != nil {
+			return false
+		}
+		rx, err := regexp.Compile(expr)
+		return err == nil && rx.MatchString(line)
+	}
+	for i := 0; i < len(ignore); i++ {
+		switch c := ignore[i]; {
+		case c == '\\' && i+1 < len(ignore) && ignore[i+1] == ':':
+			pat.WriteString(`\:`)
+			i++
+		case c == ':':
+			if check() {
+				return true
+			}
+		default:
+			pat.WriteByte(c)
+		}
+	}
+	return check()
+}
+
+// eraseDupsLocked removes the entries equal to line, for
+// HISTCONTROL=erasedups, and reports whether it removed any. Like Bash, it
+// leaves the count of the session's entries alone, so that the history file
+// is rewritten at exit once more entries were erased than remain.
+// h.mu must be held.
+func (h *history) eraseDupsLocked(line string) bool {
+	if !h.cfg.control.eraseDups {
+		return false
+	}
+	n := len(h.entries)
+	h.entries = slices.DeleteFunc(h.entries, func(entry string) bool { return entry == line })
+	return len(h.entries) != n
 }
 
 // appendLocked stores line, honoring HISTSIZE, and reports whether it was

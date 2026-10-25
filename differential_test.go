@@ -820,6 +820,8 @@ func TestDifferentialHistoryVariablesAtRuntime(t *testing.T) {
 		{name: "small HISTSIZE numbering", lines: []string{"HISTSIZE=2", "echo a", "echo b", "echo c", "history", "history -d 5", "history", "history -c", "echo d", "history"}},
 		{name: "HISTSIZE zero", lines: []string{"echo a", "HISTSIZE=0", "echo b", "history"}},
 		{name: "HISTCONTROL", lines: []string{"HISTCONTROL=ignoredups", "echo a", "echo a", " echo b", "HISTCONTROL=ignorespace", " echo c", "history"}},
+		{name: "HISTIGNORE", lines: []string{`HISTIGNORE='ls*:&:echo\:*'`, "ls -l", "echo a", "echo a", "echo:b", "echo c", "history"}},
+		{name: "erasedups", lines: []string{"HISTCONTROL=erasedups", "echo a", "echo b", "echo a", "history", "echo b", "history"}},
 		// Unlike Bash, HISTFILESIZE gets no default; see installHistoryDefaults.
 		{name: "defaults", lines: []string{`echo "$HISTSIZE ${HISTFILE##*/}"`}, env: withoutLimits},
 		{name: "unset HISTSIZE", lines: []string{"HISTSIZE=1", "unset HISTSIZE", "echo a", "history"}},
@@ -871,6 +873,7 @@ func TestDifferentialHistoryBuiltinOptions(t *testing.T) {
 		{name: "other shell appends", seed: "old1\nold2\n", lines: []string{"echo a", `echo X >> "$HISTFILE"`}},
 		{name: "delete loaded entry", seed: "old1\nold2\n", lines: []string{"echo a", "history -d 1"}},
 		{name: "clear", seed: "old1\n", lines: []string{"echo a", "history -c", "echo b"}},
+		{name: "erasedups file", seed: "echo a\n", lines: []string{"HISTCONTROL=erasedups", "echo b", "echo a", "echo b"}},
 		{name: "stifled", seed: "old1\nold2\n", lines: []string{"echo a", "echo b", "HISTSIZE=1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
