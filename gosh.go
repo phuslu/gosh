@@ -228,6 +228,7 @@ func (s *Shell) initialize() error {
 		opts:       s.opts,
 		aliases:    s.aliases,
 		exitTrap:   s.exitTrap,
+		hasBackend: s.cfg.Backend != nil,
 	}
 	opts = append(opts, interp.CallHandler(callHandler(deps)))
 	opts = append(opts, interp.ExecHandlers(execHandler(deps, backendExec(s.cfg.Backend))))

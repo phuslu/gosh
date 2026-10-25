@@ -3,7 +3,6 @@ package gosh
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"slices"
 	"strings"
 
@@ -21,6 +20,9 @@ type callDeps struct {
 	opts       *shellOptions
 	aliases    *aliasTable
 	exitTrap   *exitTrap
+	// hasBackend reports that a Backend runs commands, so host fallbacks
+	// such as the wget builtin must stay out of the way.
+	hasBackend bool
 }
 
 // Sentinel command names. The call middleware rewrites an intercepted builtin
@@ -230,13 +232,16 @@ func (d callDeps) rewriteCompopt(ctx context.Context, argv []string) ([]string, 
 // gosh implementation only exists as a fallback for hosts without a real
 // wget, so the LookPath probe that decides whether to intercept at all has to
 // run here anyway, and there is no external builtin whose exit statuses we
-// need to reproduce.
+// need to reproduce. A Backend decides on its own what "wget" runs.
 func (d callDeps) rewriteWget(ctx context.Context, argv []string) ([]string, bool) {
-	if _, err := exec.LookPath(argv[0]); err == nil {
+	if d.hasBackend {
 		return nil, false
 	}
 	hc := interp.HandlerCtx(ctx)
-	file, err := builtinWget(ctx, argv[1:], hc.Stdout)
+	if _, err := interp.LookPathDir(hc.Dir, hc.Env, argv[0]); err == nil {
+		return nil, false
+	}
+	file, err := builtinWget(ctx, argv[1:], hc.Dir, hc.Stdout)
 	if err != nil {
 		fmt.Fprintln(hc.Stderr, err)
 		return []string{"false"}, true

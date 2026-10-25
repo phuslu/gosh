@@ -5,6 +5,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -214,5 +217,46 @@ func TestInteractiveEOFRunsExitTrap(t *testing.T) {
 	}
 	if got, want := stdout.String(), "bye:1\n"; got != want {
 		t.Fatalf("stdout = %q, want %q\nstderr: %s", got, want, stderr.String())
+	}
+}
+
+func TestWgetBuiltinSavesInShellDirectory(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "payload")
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	s, err := New(Config{
+		Stdout: &stdout,
+		Stderr: &stderr,
+		// No wget on this PATH, whatever the host has.
+		Env: []string{"PATH=" + t.TempDir(), "HOME=" + t.TempDir()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := "cd " + dir + " && wget " + server.URL + "/file.txt"
+	if err := s.Eval(context.Background(), script); err != nil {
+		t.Fatalf("wget failed: %v\nstderr: %s", err, stderr.String())
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "file.txt"))
+	if err != nil || string(data) != "payload" {
+		t.Fatalf("saved file = %q, %v; want %q in the shell's directory", data, err, "payload")
+	}
+}
+
+func TestWgetBuiltinDefersToBackend(t *testing.T) {
+	backend := &mockBackend{}
+	s, err := New(Config{Env: []string{"PATH=" + t.TempDir()}, Backend: backend})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Eval(context.Background(), "wget http://127.0.0.1:1/x"); err != nil {
+		t.Fatalf("wget failed: %v", err)
+	}
+	if got, _, _, _, _ := backend.snapshot(); len(got) != 1 || got[0][0] != "wget" {
+		t.Fatalf("backend execs = %q, want the wget call", got)
 	}
 }

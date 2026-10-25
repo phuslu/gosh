@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -147,7 +148,9 @@ func dropPrintfDashDash(args []string) ([]string, bool) {
 	return next, true
 }
 
-func builtinWget(ctx context.Context, args []string, out io.Writer) (string, error) {
+// builtinWget downloads one URL into dir, the shell's working directory,
+// and returns the name of the file it saved.
+func builtinWget(ctx context.Context, args []string, dir string, out io.Writer) (string, error) {
 	if len(args) != 1 {
 		return "", fmt.Errorf("wget: builtin only supports a single URL argument")
 	}
@@ -178,7 +181,7 @@ func builtinWget(ctx context.Context, args []string, out io.Writer) (string, err
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("wget: bad status: %s", resp.Status)
 	}
-	file, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	file, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
 		return "", fmt.Errorf("wget: cannot open %s: %w", name, err)
 	}
