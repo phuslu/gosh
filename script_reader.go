@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 
@@ -208,6 +209,31 @@ func (s *Shell) finishScript(ctx context.Context, name string, status int) error
 		stmts = []*syntax.Stmt{setTrapStmt(callback), statusStmt(status)}
 	}
 	return s.runner.Run(ctx, &syntax.File{Name: name, Stmts: stmts})
+}
+
+// runInitFile runs an interactive shell's startup file one complete command
+// at a time, like Bash: a syntax error ends the file but not the shell, the
+// commands' exit statuses are not errors, and "exit" ends the shell.
+func (s *Shell) runInitFile(ctx context.Context, file *os.File) {
+	parser := syntax.NewParser()
+	for stmts, err := range parser.InteractiveSeq(newScriptReader(file)) {
+		if err != nil {
+			fmt.Fprintln(s.stderr, withParseFilename(err, file.Name()))
+			return
+		}
+		if parser.Incomplete() || len(stmts) == 0 {
+			continue
+		}
+		s.expandAliases(stmts...)
+		err := s.runStatements(ctx, stmts)
+		if s.runner.Exited() {
+			s.initExit, s.initExitErr = true, err
+			return
+		}
+		if err != nil && !IsExitStatus(err) {
+			fmt.Fprintln(s.stderr, err)
+		}
+	}
 }
 
 // withParseFilename names the script in a syntax error; the interactive

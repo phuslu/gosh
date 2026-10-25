@@ -82,6 +82,10 @@ type Shell struct {
 	command     *commandSpec
 	interactive bool
 	noop        bool
+	// initExit is set when the startup file ran "exit"; the shell then ends
+	// with initExitErr instead of starting.
+	initExit    bool
+	initExitErr error
 
 	baseCtx context.Context
 
@@ -262,14 +266,8 @@ func (s *Shell) initialize() error {
 		} else {
 			file = expandEnv(s.env, file)
 		}
-		fileHandle, err := os.Open(file)
-		if err == nil {
-			prog, err := s.parser.Parse(fileHandle, fileHandle.Name())
-			if err != nil {
-				fmt.Fprintln(s.stderr, "failed to parse", fileHandle.Name(), ":", err)
-			} else if err := runner.Run(s.baseCtx, prog); err != nil {
-				fmt.Fprintln(s.stderr, "failed to run", fileHandle.Name(), ":", err)
-			}
+		if fileHandle, err := os.Open(file); err == nil {
+			s.runInitFile(s.baseCtx, fileHandle)
 			fileHandle.Close()
 		}
 	}
@@ -299,6 +297,9 @@ func (s *Shell) cfgNotifySignals() bool {
 func (s *Shell) Run(ctx context.Context) error {
 	if s.noop {
 		return nil
+	}
+	if s.initExit {
+		return s.initExitErr
 	}
 	ctx, cancel := s.runContext(ctx)
 	defer cancel()
@@ -396,6 +397,9 @@ func (s *Shell) expandAliases(stmts ...*syntax.Stmt) {
 func (s *Shell) Interactive(ctx context.Context) error {
 	if s.noop {
 		return fmt.Errorf("gosh: shell was created for a metadata-only invocation")
+	}
+	if s.initExit {
+		return s.initExitErr
 	}
 	ctx, cancel := s.runContext(ctx)
 	defer cancel()

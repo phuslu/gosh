@@ -232,3 +232,40 @@ func TestRunRcfileAndNorc(t *testing.T) {
 		t.Fatalf("--norc stdout = %q, want empty", got)
 	}
 }
+
+func TestRunRcfileRunsLikeBash(t *testing.T) {
+	for _, tc := range []struct {
+		name, rc, stdin string
+		wantStdout      string
+		wantCode        int
+		wantStderr      string
+	}{
+		{name: "failing last command", rc: "echo rc\nfalse\n", stdin: "echo $?\n", wantStdout: "rc\n1\n"},
+		{name: "syntax error", rc: "echo before\n(\necho after\n", stdin: "echo shell\n", wantStdout: "before\nshell\n", wantStderr: "rc:2:1"},
+		{name: "exit", rc: "trap 'echo bye' EXIT\necho rc\nexit 4\necho never\n", stdin: "echo never\n", wantStdout: "rc\nbye\n", wantCode: 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rcFile := filepath.Join(t.TempDir(), "rc")
+			if err := os.WriteFile(rcFile, []byte(tc.rc), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			err := Run(Config{
+				Args:   []string{"gosh", "-i", "--rcfile", rcFile},
+				Stdin:  strings.NewReader(tc.stdin),
+				Stdout: &stdout,
+				Stderr: &stderr,
+				Env:    testEnv(t),
+			})
+			if got := ExitCode(err); got != tc.wantCode {
+				t.Fatalf("exit code = %d, want %d (err: %v)\nstderr: %s", got, tc.wantCode, err, stderr.String())
+			}
+			if got := stdout.String(); got != tc.wantStdout {
+				t.Fatalf("stdout = %q, want %q\nstderr: %s", got, tc.wantStdout, stderr.String())
+			}
+			if strings.Contains(stderr.String(), "failed to") || !strings.Contains(stderr.String(), tc.wantStderr) {
+				t.Fatalf("stderr = %q, want it to mention %q", stderr.String(), tc.wantStderr)
+			}
+		})
+	}
+}
