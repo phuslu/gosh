@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -797,4 +798,57 @@ func TestDifferentialHistoryBuiltinKnownDivergences(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDifferentialHistoryVariablesAtRuntime checks that history variables
+// take effect as soon as they are assigned, and that the defaults Bash gives
+// them make unsetting them meaningful.
+func TestDifferentialHistoryVariablesAtRuntime(t *testing.T) {
+	requireBash(t)
+	withoutLimits := func(env []string) []string {
+		return slices.DeleteFunc(env, func(kv string) bool {
+			return strings.HasPrefix(kv, "HISTSIZE=") || strings.HasPrefix(kv, "HISTFILESIZE=")
+		})
+	}
+	for _, tc := range []struct {
+		name  string
+		lines []string
+		env   func([]string) []string
+	}{
+		{name: "shrink HISTSIZE", lines: []string{"echo a", "echo b", "echo c", "HISTSIZE=2", "history"}},
+		{name: "shrink HISTSIZE more", lines: []string{"echo a", "echo b", "echo c", "echo d", "HISTSIZE=2", "echo e", "history"}},
+		{name: "small HISTSIZE numbering", lines: []string{"HISTSIZE=2", "echo a", "echo b", "echo c", "history", "history -d 5", "history", "history -c", "echo d", "history"}},
+		{name: "HISTSIZE zero", lines: []string{"echo a", "HISTSIZE=0", "echo b", "history"}},
+		{name: "HISTCONTROL", lines: []string{"HISTCONTROL=ignoredups", "echo a", "echo a", " echo b", "HISTCONTROL=ignorespace", " echo c", "history"}},
+		// Unlike Bash, HISTFILESIZE gets no default; see installHistoryDefaults.
+		{name: "defaults", lines: []string{`echo "$HISTSIZE ${HISTFILE##*/}"`}, env: withoutLimits},
+		{name: "unset HISTSIZE", lines: []string{"HISTSIZE=1", "unset HISTSIZE", "echo a", "history"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := append(slices.Clone(tc.lines), "exit")
+			bashEnv := historyEnv(t, filepath.Join(t.TempDir(), "history"))
+			goshEnv := historyEnv(t, filepath.Join(t.TempDir(), "history"))
+			if tc.env != nil {
+				bashEnv, goshEnv = tc.env(bashEnv), tc.env(goshEnv)
+			}
+			want := runInteractiveHistory(t, "bash", "", []string{"--noprofile", "--norc", "-i"}, script, bashEnv)
+			got := runInteractiveHistory(t, testGoshBinary, "", []string{"-i", "--norc"}, script, goshEnv)
+			if got.stdout != want.stdout {
+				t.Fatalf("output mismatch:\nbash: %q\ngosh: %q\ngosh stderr: %q", want.stdout, got.stdout, got.stderr)
+			}
+		})
+	}
+
+	t.Run("unset HISTFILE", func(t *testing.T) {
+		bashFile := filepath.Join(t.TempDir(), "history")
+		goshFile := filepath.Join(t.TempDir(), "history")
+		script := []string{"echo a", "unset HISTFILE", "echo b", "exit"}
+		runInteractiveHistory(t, "bash", "", []string{"--noprofile", "--norc", "-i"}, script, historyEnv(t, bashFile))
+		runInteractiveHistory(t, testGoshBinary, "", []string{"-i", "--norc"}, script, historyEnv(t, goshFile))
+		bashData, _ := os.ReadFile(bashFile)
+		goshData, _ := os.ReadFile(goshFile)
+		if string(goshData) != string(bashData) {
+			t.Fatalf("history file mismatch:\nbash: %q\ngosh: %q", bashData, goshData)
+		}
+	})
 }

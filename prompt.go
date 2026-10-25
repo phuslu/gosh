@@ -220,7 +220,7 @@ func (p *promptState) historyNumber() string {
 	if p.env == nil || p.env.history == nil {
 		return "0"
 	}
-	return strconv.Itoa(p.env.history.Len() + 1)
+	return strconv.Itoa(p.env.history.Next())
 }
 
 type promptRenderer struct {

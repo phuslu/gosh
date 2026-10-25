@@ -382,6 +382,20 @@ func (s *Shell) runStatements(ctx context.Context, stmts []*syntax.Stmt) error {
 	return err
 }
 
+// syncHistoryConfig applies changes to the history variables made by the
+// commands just run, as Bash does when they are assigned.
+func (s *Shell) syncHistoryConfig() {
+	cfg := shellHistoryConfig(s.runner)
+	if s.rl != nil {
+		rlCfg := s.rl.GetConfig()
+		if limit := readlineHistoryLimit(cfg.inMemoryLimit); rlCfg.HistoryLimit != limit {
+			rlCfg.HistoryLimit = limit
+			_ = s.rl.SetConfig(rlCfg)
+		}
+	}
+	s.history.configure(cfg)
+}
+
 // expandAliases applies Bash's recursive alias expansion to freshly parsed
 // code when alias expansion is on; see aliasTable.
 func (s *Shell) expandAliases(stmts ...*syntax.Stmt) {
@@ -464,14 +478,12 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 	currentPrompt := prompts.render(ctx, "PS1", promptFallback, promptSeq)
 	promptSeq++
 
-	s.history.cfg.inMemoryLimit = resolveShellHistoryLimit(s.runner)
-	s.history.cfg.fileLimit = resolveShellHistoryFileLimit(s.runner)
-	s.history.cfg.control = resolveShellHistoryControl(s.runner)
+	installHistoryDefaults(s.runner)
+	s.history.cfg = shellHistoryConfig(s.runner)
 	s.history.onError = func(err error) {
 		fmt.Fprintln(s.stderr, "history:", err)
 	}
-	histFile := resolveShellHistoryFile(s.runner)
-	s.history.cfg.file = histFile
+	histFile := s.history.cfg.file
 	s.history.appendOnAdd = func() bool {
 		return shoptEnabled(s.opts, "histappend")
 	}
@@ -617,6 +629,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 			exitErr = err
 			return false
 		}
+		s.syncHistoryConfig()
 
 		// Restore the main prompt, updating it in case the effective UID
 		// changed (e.g. via su).

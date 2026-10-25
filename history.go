@@ -7,13 +7,16 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"unicode"
 
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 )
 
@@ -38,7 +41,11 @@ type history struct {
 	onError     func(error)
 	mu          sync.Mutex
 	entries     []string
-	dirtyFile   bool
+	// base is the number of entries dropped from the front since the list
+	// was last cleared, so that like Bash's history_base, entry i of
+	// entries keeps the number base+i+1 when older entries are dropped.
+	base      int
+	dirtyFile bool
 }
 
 type historyControl struct {
@@ -57,17 +64,80 @@ func readlineHistoryLimit(limit int) int {
 	case limit > 0:
 		return limit
 	case limit < 0:
-		return 0
+		return math.MaxInt32
 	default:
 		return 1
 	}
 }
 
-func resolveShellHistoryLimit(runner *interp.Runner) int {
-	if val, ok := runnerStringVar(runner, "HISTSIZE"); ok {
-		return parseHistoryLimit(val)
+// installHistoryDefaults gives the history variables that the startup files
+// left unset Bash's defaults: HISTFILE names the default history file and
+// HISTSIZE is 500. Once they are shell variables, unsetting one means what
+// it does in Bash: no history file, or no limit. Unlike Bash, HISTFILESIZE
+// stays unset, so an existing history file is never cut to HISTSIZE.
+func installHistoryDefaults(runner *interp.Runner) {
+	env, ok := runner.Env.(*shellEnviron)
+	if !ok {
+		return
 	}
-	return defaultHistoryLimit
+	set := func(name, value string) {
+		_ = env.Set(name, expand.Variable{Set: true, Kind: expand.String, Str: value})
+	}
+	if _, ok := runnerStringVar(runner, "HISTFILE"); !ok {
+		if file := defaultShellHistoryFile(runner); file != "" {
+			set("HISTFILE", file)
+		}
+	}
+	if _, ok := runnerStringVar(runner, "HISTSIZE"); !ok {
+		set("HISTSIZE", strconv.Itoa(defaultHistoryLimit))
+	}
+}
+
+// shellHistoryConfig reads the history settings from the shell variables as
+// they are now. Unlike at startup, an unset HISTSIZE or HISTFILESIZE means
+// no limit and an unset HISTFILE means no history file.
+func shellHistoryConfig(runner *interp.Runner) historyConfig {
+	size, _ := runnerStringVar(runner, "HISTSIZE")
+	fileSize, _ := runnerStringVar(runner, "HISTFILESIZE")
+	control, _ := runnerStringVar(runner, "HISTCONTROL")
+	file, _ := runnerStringVar(runner, "HISTFILE")
+	if file == os.DevNull || file == "/dev/null" {
+		file = ""
+	}
+	return historyConfig{
+		inMemoryLimit: parseHistoryLimit(size),
+		fileLimit:     parseHistoryLimit(fileSize),
+		control:       parseHistoryControl(control),
+		file:          file,
+	}
+}
+
+// configure applies cfg as Bash does when a history variable changes: a
+// smaller HISTSIZE drops the oldest entries at once and a smaller
+// HISTFILESIZE truncates the history file.
+func (h *history) configure(cfg historyConfig) {
+	h.mu.Lock()
+	old := h.cfg
+	h.cfg = cfg
+	trimmed := false
+	if limit := cfg.inMemoryLimit; limit >= 0 && len(h.entries) > limit {
+		n := len(h.entries) - limit
+		h.dropLocked(n)
+		// Bash's stifle_history sets history_base to the number of entries
+		// it dropped rather than adding to it, so the remaining entries are
+		// numbered one lower than before; match its numbering.
+		h.base = n - 1
+		trimmed = true
+	}
+	h.mu.Unlock()
+	if trimmed && h.resync != nil {
+		h.resync()
+	}
+	if cfg.fileLimit != old.fileLimit || cfg.file != old.file {
+		if err := h.TruncateFile(); err != nil && h.onError != nil {
+			h.onError(err)
+		}
+	}
 }
 
 // parseHistoryLimit follows Bash's startup behavior for HISTSIZE and
@@ -86,20 +156,6 @@ func parseHistoryLimit(val string) int {
 	return n
 }
 
-func resolveShellHistoryFileLimit(runner *interp.Runner) int {
-	if val, ok := runnerStringVar(runner, "HISTFILESIZE"); ok {
-		return parseHistoryLimit(val)
-	}
-	return -1
-}
-
-func resolveShellHistoryControl(runner *interp.Runner) historyControl {
-	if val, ok := runnerStringVar(runner, "HISTCONTROL"); ok {
-		return parseHistoryControl(val)
-	}
-	return historyControl{}
-}
-
 func parseHistoryControl(val string) historyControl {
 	var control historyControl
 	for _, part := range strings.FieldsFunc(val, func(r rune) bool {
@@ -116,20 +172,6 @@ func parseHistoryControl(val string) historyControl {
 		}
 	}
 	return control
-}
-
-// resolveShellHistoryFile resolves HISTFILE. An explicit non-empty value
-// wins, /dev/null disables file storage, and an unset HISTFILE falls back to
-// $HOME/.gosh_history when HOME exists.
-func resolveShellHistoryFile(runner *interp.Runner) string {
-	histFile, ok := runnerStringVar(runner, "HISTFILE")
-	if !ok {
-		return defaultShellHistoryFile(runner)
-	}
-	if histFile == "" || histFile == os.DevNull || histFile == "/dev/null" {
-		return ""
-	}
-	return histFile
 }
 
 func defaultShellHistoryFile(runner *interp.Runner) string {
@@ -231,9 +273,15 @@ func (h *history) appendLocked(line string) bool {
 	}
 	h.entries = append(h.entries, line)
 	if h.cfg.inMemoryLimit > 0 && len(h.entries) > h.cfg.inMemoryLimit {
-		h.entries = h.entries[len(h.entries)-h.cfg.inMemoryLimit:]
+		h.dropLocked(len(h.entries) - h.cfg.inMemoryLimit)
 	}
 	return true
+}
+
+// dropLocked forgets the n oldest entries. h.mu must be held.
+func (h *history) dropLocked(n int) {
+	h.entries = append(h.entries[:0], h.entries[n:]...)
+	h.base += n
 }
 
 func (h *history) Entries() []string {
@@ -244,14 +292,22 @@ func (h *history) Entries() []string {
 	return out
 }
 
-// Len returns the number of in-memory history entries.
-func (h *history) Len() int {
+// Numbered returns the in-memory entries and the number of the first one.
+func (h *history) Numbered() (first int, entries []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.base + 1, slices.Clone(h.entries)
+}
+
+// Next returns the number the next entry will get, as shown by \! in
+// prompts.
+func (h *history) Next() int {
 	if h == nil {
-		return 0
+		return 1
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return len(h.entries)
+	return h.base + len(h.entries) + 1
 }
 
 // Clear forgets all in-memory entries without touching the history file.
@@ -261,6 +317,7 @@ func (h *history) Clear() {
 	}
 	h.mu.Lock()
 	h.entries = h.entries[:0]
+	h.base = 0
 	h.dirtyFile = false
 	h.mu.Unlock()
 	if h.resync != nil {
@@ -268,8 +325,8 @@ func (h *history) Clear() {
 	}
 }
 
-// Delete removes the entry at pos (1-based; negative counts from the end)
-// and reports whether pos was in range. The removal is persisted on the next
+// Delete removes the entry numbered pos (negative counts from the end) and
+// reports whether pos was in range. The removal is persisted on the next
 // rewrite of the history file.
 func (h *history) Delete(pos int) bool {
 	if h == nil {
@@ -279,6 +336,8 @@ func (h *history) Delete(pos int) bool {
 	defer h.mu.Unlock()
 	if pos < 0 {
 		pos = len(h.entries) + pos + 1
+	} else {
+		pos -= h.base
 	}
 	if pos < 1 || pos > len(h.entries) {
 		return false

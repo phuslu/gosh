@@ -80,14 +80,17 @@ func TestShellStateDoesNotLeakHostEnvironment(t *testing.T) {
 	if got := completer.shellVar("GOSH_LEAK_HOST_ONLY"); got != "" {
 		t.Fatalf("completion leaked host variable: %q", got)
 	}
-	if got := resolveShellHistoryControl(runner); got != (historyControl{}) {
-		t.Fatalf("history control leaked host HISTCONTROL: %#v", got)
+	installShellOptionVariable(runner, "test")
+	installHistoryDefaults(runner)
+	cfg := shellHistoryConfig(runner)
+	if cfg.control != (historyControl{}) {
+		t.Fatalf("history control leaked host HISTCONTROL: %#v", cfg.control)
 	}
-	if got := resolveShellHistoryFile(runner); got != "" {
-		t.Fatalf("history file leaked host HISTFILE: %q", got)
+	if cfg.file != "" {
+		t.Fatalf("history file leaked host HISTFILE: %q", cfg.file)
 	}
-	if got := resolveShellHistoryLimit(runner); got != 500 {
-		t.Fatalf("default history limit = %d, want 500", got)
+	if cfg.inMemoryLimit != 500 {
+		t.Fatalf("default history limit = %d, want 500", cfg.inMemoryLimit)
 	}
 }
 

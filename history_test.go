@@ -2,6 +2,7 @@ package gosh
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -69,62 +71,57 @@ func newTestRunner(t *testing.T, env []string) *interp.Runner {
 	return runner
 }
 
-func TestShellHistoryFileResolution(t *testing.T) {
-	t.Run("explicit file", func(t *testing.T) {
-		runner := newTestRunner(t, []string{"HISTFILE=/tmp/explicit", "HOME=/home/a"})
-		if got, want := resolveShellHistoryFile(runner), "/tmp/explicit"; got != want {
-			t.Fatalf("resolveShellHistoryFile = %q, want %q", got, want)
-		}
-	})
-	t.Run("dev null", func(t *testing.T) {
-		runner := newTestRunner(t, []string{"HISTFILE=/dev/null", "HOME=/home/a"})
-		if got := resolveShellHistoryFile(runner); got != "" {
-			t.Fatalf("resolveShellHistoryFile = %q, want empty", got)
-		}
-	})
-	t.Run("empty", func(t *testing.T) {
-		runner := newTestRunner(t, []string{"HISTFILE=", "HOME=/home/a"})
-		if got := resolveShellHistoryFile(runner); got != "" {
-			t.Fatalf("resolveShellHistoryFile = %q, want empty", got)
-		}
-	})
-	t.Run("default", func(t *testing.T) {
-		runner := newTestRunner(t, []string{"HOME=/home/a"})
-		if got, want := resolveShellHistoryFile(runner), filepath.Join("/home/a", ".gosh_history"); got != want {
-			t.Fatalf("resolveShellHistoryFile = %q, want %q", got, want)
-		}
-	})
-	t.Run("no home", func(t *testing.T) {
-		runner := newTestRunner(t, []string{"PATH=/bin"})
-		if got := resolveShellHistoryFile(runner); got != "" {
-			t.Fatalf("resolveShellHistoryFile = %q, want empty", got)
-		}
-	})
+func TestShellHistoryConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want historyConfig
+	}{
+		{"defaults", []string{"HOME=/home/a"}, historyConfig{inMemoryLimit: 500, fileLimit: -1, file: filepath.Join("/home/a", ".gosh_history")}},
+		{"no home", []string{"PATH=/bin"}, historyConfig{inMemoryLimit: 500, fileLimit: -1}},
+		{"explicit", []string{"HISTFILE=/tmp/explicit", "HISTSIZE=7", "HISTFILESIZE=9", "HISTCONTROL=ignoreboth"},
+			historyConfig{inMemoryLimit: 7, fileLimit: 9, file: "/tmp/explicit", control: historyControl{ignoreDups: true, ignoreSpace: true}}},
+		{"dev null", []string{"HISTFILE=/dev/null", "HOME=/home/a"}, historyConfig{inMemoryLimit: 500, fileLimit: -1}},
+		{"empty and invalid", []string{"HISTFILE=", "HOME=/home/a", "HISTSIZE=-2", "HISTFILESIZE=abc"}, historyConfig{inMemoryLimit: -1, fileLimit: -1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := newTestRunner(t, tc.env)
+			installShellOptionVariable(runner, "test")
+			installHistoryDefaults(runner)
+			if got := shellHistoryConfig(runner); got != tc.want {
+				t.Fatalf("shellHistoryConfig = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
 }
 
-func TestShellHistoryLimitsFromRunner(t *testing.T) {
-	runner := newTestRunner(t, []string{"HISTSIZE=7", "HISTFILESIZE=9"})
-	if got := resolveShellHistoryLimit(runner); got != 7 {
-		t.Fatalf("resolveShellHistoryLimit = %d, want 7", got)
+func TestShellHistoryConfigAfterUnset(t *testing.T) {
+	runner := newTestRunner(t, []string{"HOME=/home/a"})
+	installShellOptionVariable(runner, "test")
+	installHistoryDefaults(runner)
+	if err := runner.Run(context.Background(), parseTestStmts(t, "unset HISTFILE HISTSIZE HISTFILESIZE\n")[0]); err != nil {
+		t.Fatal(err)
 	}
-	if got := resolveShellHistoryFileLimit(runner); got != 9 {
-		t.Fatalf("resolveShellHistoryFileLimit = %d, want 9", got)
+	// Unset after startup means no history file and no limits, as in Bash.
+	if got, want := shellHistoryConfig(runner), (historyConfig{inMemoryLimit: -1, fileLimit: -1}); got != want {
+		t.Fatalf("shellHistoryConfig = %+v, want %+v", got, want)
 	}
+}
 
-	runner = newTestRunner(t, []string{"HISTSIZE=-2", "HISTFILESIZE=abc"})
-	if got := resolveShellHistoryLimit(runner); got != -1 {
-		t.Fatalf("resolveShellHistoryLimit(-2) = %d, want -1", got)
+func TestHistoryConfigureShrinks(t *testing.T) {
+	h := &history{cfg: historyConfig{inMemoryLimit: -1}}
+	resynced := false
+	h.resync = func() { resynced = true }
+	for _, line := range []string{"one", "two", "three"} {
+		h.Add(line)
 	}
-	if got := resolveShellHistoryFileLimit(runner); got != -1 {
-		t.Fatalf("resolveShellHistoryFileLimit(abc) = %d, want -1", got)
+	h.configure(historyConfig{inMemoryLimit: 2})
+	if got := h.Entries(); !slices.Equal(got, []string{"two", "three"}) || !resynced {
+		t.Fatalf("entries = %q (resynced %v), want the last two and a resync", got, resynced)
 	}
-
-	runner = newTestRunner(t, []string{})
-	if got := resolveShellHistoryLimit(runner); got != defaultHistoryLimit {
-		t.Fatalf("unset HISTSIZE limit = %d, want %d", got, defaultHistoryLimit)
-	}
-	if got := resolveShellHistoryFileLimit(runner); got != -1 {
-		t.Fatalf("unset HISTFILESIZE limit = %d, want -1", got)
+	h.configure(historyConfig{inMemoryLimit: 0})
+	if got := h.Entries(); len(got) != 0 {
+		t.Fatalf("entries after HISTSIZE=0 = %q, want none", got)
 	}
 }
 

@@ -74,8 +74,9 @@ func builtinHistory(h *history, args []string, stdout io.Writer) error {
 		}
 	}
 	if !clear && !delete && !read && !write {
-		for idx, entry := range h.Entries() {
-			fmt.Fprintf(stdout, "%5d  %s\n", idx+1, entry)
+		first, entries := h.Numbered()
+		for idx, entry := range entries {
+			fmt.Fprintf(stdout, "%5d  %s\n", first+idx, entry)
 		}
 	}
 	return nil
@@ -96,7 +97,8 @@ func builtinFc(h *history, args []string, stdout io.Writer) error {
 		return fmt.Errorf("fc: too many arguments")
 	}
 
-	entries := h.Entries()
+	base, entries := h.Numbered()
+	base--
 	n := len(entries)
 	if n == 0 {
 		return nil
@@ -107,12 +109,12 @@ func builtinFc(h *history, args []string, stdout io.Writer) error {
 	}
 	var err error
 	if len(args) >= 1 && args[0] != "" {
-		if first, err = fcOffset(args[0], n); err != nil {
+		if first, err = fcOffset(args[0], base, n); err != nil {
 			return err
 		}
 	}
 	if len(args) >= 2 {
-		if last, err = fcOffset(args[1], n); err != nil {
+		if last, err = fcOffset(args[1], base, n); err != nil {
 			return err
 		}
 	}
@@ -120,17 +122,21 @@ func builtinFc(h *history, args []string, stdout io.Writer) error {
 		return fmt.Errorf("fc: history specification out of range")
 	}
 	for i := first; i <= last; i++ {
-		fmt.Fprintf(stdout, "%d\t%s\n", i, entries[i-1])
+		fmt.Fprintf(stdout, "%d\t%s\n", base+i, entries[i-1])
 	}
 	return nil
 }
 
-func fcOffset(spec string, n int) (int, error) {
+// fcOffset turns a history number, or a negative offset from the end, into
+// a 1-based index into the n entries after the first base were dropped.
+func fcOffset(spec string, base, n int) (int, error) {
 	off, err := strconv.Atoi(spec)
 	if err != nil {
 		return 0, fmt.Errorf("fc: invalid history specification %q", spec)
 	}
-	if off < 0 {
+	if off >= 0 {
+		off -= base
+	} else {
 		off += n + 1
 	}
 	return off, nil
