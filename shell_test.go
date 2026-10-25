@@ -36,6 +36,25 @@ func TestShellEvalKeepsState(t *testing.T) {
 	}
 }
 
+func TestShellEvalDoesNotRunExitTrap(t *testing.T) {
+	var stdout bytes.Buffer
+	s, err := New(Config{Stdout: &stdout, Env: testEnv(t)})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	for _, script := range []string{"trap 'echo bye' EXIT", "echo a", "echo b"} {
+		if err := s.Eval(context.Background(), script); err != nil {
+			t.Fatalf("Eval(%q) failed: %v", script, err)
+		}
+	}
+	if err := s.Eval(context.Background(), "exit 3"); !IsExitStatus(err) || ExitCode(err) != 3 {
+		t.Fatalf("Eval(exit 3) = %v, want exit status 3", err)
+	}
+	if got, want := stdout.String(), "a\nb\nbye\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
 func TestShellStateDoesNotLeakHostEnvironment(t *testing.T) {
 	t.Setenv("GOSH_LEAK_HOST_ONLY", "secret")
 	t.Setenv("HISTCONTROL", "ignoredups")

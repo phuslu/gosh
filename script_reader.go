@@ -162,12 +162,17 @@ func scriptStdin(stdin io.Reader) (*os.File, func(), error) {
 // runScript parses and runs a script one complete command at a time, as
 // Bash does: the commands before a syntax error still run, and a command
 // defined or changed by one line affects how the following lines run. name
-// is used in syntax errors.
+// is $0 and is used in syntax errors. The script's EXIT trap runs once, when
+// it ends; see exitTrap.
 func (s *Shell) runScript(ctx context.Context, r *scriptReader, name string) error {
+	s.exitTrap.hold(true)
+	defer s.exitTrap.hold(false)
 	parser := syntax.NewParser()
-	var lastStatus error
+	status := 0
 	for stmts, err := range parser.InteractiveSeq(r) {
 		if err != nil {
+			// Like Bash, a syntax error ends the script with status 2.
+			s.finishScript(ctx, name, 2)
 			return withParseFilename(err, name)
 		}
 		if parser.Incomplete() || len(stmts) == 0 {
@@ -179,20 +184,30 @@ func (s *Shell) runScript(ctx context.Context, r *scriptReader, name string) err
 		s.expandAliases(stmts...)
 		// Running a File rather than bare statements keeps $0 set to name.
 		err := s.runner.Run(ctx, &syntax.File{Name: name, Stmts: stmts})
-		var status interp.ExitStatus
+		var exit interp.ExitStatus
 		switch {
 		case err == nil:
-			lastStatus = nil
-		case errors.As(err, &status):
-			lastStatus = err
+			status = 0
+		case errors.As(err, &exit):
+			status = int(exit)
 		default:
 			return err
 		}
 		if s.runner.Exited() {
-			return lastStatus
+			break
 		}
 	}
-	return lastStatus
+	return s.finishScript(ctx, name, status)
+}
+
+// finishScript ends a script with status: it runs the held EXIT trap, if
+// any, with $? set to status, and returns status.
+func (s *Shell) finishScript(ctx context.Context, name string, status int) error {
+	stmts := []*syntax.Stmt{statusStmt(status)}
+	if callback := s.exitTrap.release(); callback != "" {
+		stmts = []*syntax.Stmt{setTrapStmt(callback), statusStmt(status)}
+	}
+	return s.runner.Run(ctx, &syntax.File{Name: name, Stmts: stmts})
 }
 
 // withParseFilename names the script in a syntax error; the interactive

@@ -92,6 +92,7 @@ type Shell struct {
 	completion  *completionRegistry
 	opts        *shellOptions
 	aliases     *aliasTable
+	exitTrap    *exitTrap
 	promptCache *promptCache
 	rl          *readline.Instance
 
@@ -212,6 +213,7 @@ func (s *Shell) initialize() error {
 	s.completion = newCompletionRegistry()
 	s.opts = newShellOptions(s.interactive)
 	s.aliases = newAliasTable()
+	s.exitTrap = &exitTrap{}
 	s.promptCache = newPromptCache()
 
 	deps := callDeps{
@@ -221,6 +223,7 @@ func (s *Shell) initialize() error {
 		completion: s.completion,
 		opts:       s.opts,
 		aliases:    s.aliases,
+		exitTrap:   s.exitTrap,
 	}
 	opts = append(opts, interp.CallHandler(callHandler(deps)))
 	opts = append(opts, interp.ExecHandlers(execHandler(deps, backendExec(s.cfg.Backend))))
@@ -359,7 +362,22 @@ func (s *Shell) Eval(ctx context.Context, script string) error {
 		return err
 	}
 	s.expandAliases(prog.Stmts...)
-	return s.runner.Run(ctx, prog)
+	return s.runStatements(ctx, prog.Stmts)
+}
+
+// runStatements runs stmts and returns the result of the last one run,
+// stopping once the shell exits. Unlike running them as a File, which interp
+// treats as a whole script, this does not run the EXIT trap, so more code
+// can run in the shell afterwards.
+func (s *Shell) runStatements(ctx context.Context, stmts []*syntax.Stmt) error {
+	var err error
+	for _, stmt := range stmts {
+		err = s.runner.Run(ctx, stmt)
+		if s.runner.Exited() {
+			break
+		}
+	}
+	return err
 }
 
 // expandAliases applies Bash's recursive alias expansion to freshly parsed
@@ -431,7 +449,7 @@ func (s *Shell) runStdinScript(ctx context.Context) error {
 	if err := interp.StdIO(stdin, s.stdout, s.stderr)(s.runner); err != nil {
 		return err
 	}
-	return s.runScript(ctx, newSharedScriptReader(stdin), "")
+	return s.runScript(ctx, newSharedScriptReader(stdin), s.command.argv0)
 }
 
 func (s *Shell) runInteractive(ctx context.Context) error {

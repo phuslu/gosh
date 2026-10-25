@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"sync/atomic"
 
 	"github.com/phuslu/gosh/internal/readline"
@@ -50,7 +49,7 @@ func runInteractiveStatements(ctx context.Context, runner *interp.Runner, stmts 
 			// The cancelled context marked the runner as exiting; the next
 			// Run clears that, so recording the status is all that is left.
 			fmt.Fprintln(stderr)
-			_ = runner.Run(ctx, interruptedStatus)
+			_ = runner.Run(ctx, statusStmt(130))
 			return true, nil
 		}
 		if runner.Exited() {
@@ -66,15 +65,6 @@ func runInteractiveStatements(ctx context.Context, runner *interp.Runner, stmts 
 	}
 	return true, nil
 }
-
-// interruptedStatus sets $? to 128+SIGINT after an interrupted line.
-var interruptedStatus = func() *syntax.Stmt {
-	prog, err := syntax.NewParser().Parse(strings.NewReader("(exit 130)"), "")
-	if err != nil {
-		panic(err)
-	}
-	return prog.Stmts[0]
-}()
 
 // watchInterrupts derives a context which is cancelled by the next signal on
 // sigs. Signals which arrived while the prompt was waiting for input are

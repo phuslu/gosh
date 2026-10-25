@@ -195,6 +195,49 @@ EOF`},
 	}
 }
 
+// TestDifferentialExitTrap checks that a script runs its EXIT trap once,
+// when it ends, with the final $? and $0, however it is run.
+func TestDifferentialExitTrap(t *testing.T) {
+	requireBash(t)
+	dir := t.TempDir()
+	scripts := map[string]string{
+		"end":          "echo a\nfalse",
+		"exit":         "echo a\nexit 4\necho never",
+		"errexit":      "set -e\necho a\nfalse\necho never",
+		"syntax error": "echo a\n(",
+		"xtrace":       "set -x\necho a",
+		"err trap":     "trap 'echo err' ERR\necho a\nfalse",
+		"function":     "f() { trap 'echo f:$?' EXIT; }\nf\necho a\nfalse",
+		"reset":        "trap - EXIT\necho a",
+	}
+	for name, body := range scripts {
+		script := `trap 'echo "bye:$?:${0##*/}"' EXIT` + "\n" + strings.ReplaceAll(body, `\n`, "\n")
+		file := filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+".sh")
+		if err := os.WriteFile(file, []byte(script+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for _, mode := range []struct {
+			name              string
+			bashArgs, goshArg []string
+			stdin             []string
+		}{
+			{name: "command", bashArgs: []string{"--norc", "-c", script, "sh"}, goshArg: []string{"-c", script, "sh"}},
+			{name: "file", bashArgs: []string{"--norc", file}, goshArg: []string{file}},
+			{name: "stdin", bashArgs: []string{"--norc"}, stdin: strings.Split(script, "\n")},
+		} {
+			t.Run(name+"/"+mode.name, func(t *testing.T) {
+				want := runDifferentialShell(t, "bash", mode.bashArgs, mode.stdin, nil, dir)
+				got := runDifferentialShell(t, testGoshBinary, mode.goshArg, mode.stdin, nil, dir)
+				// bash names its stdin script after argv[0].
+				want.stdout = strings.ReplaceAll(want.stdout, ":bash\n", ":gosh\n")
+				if got.stdout != want.stdout || got.code != want.code {
+					t.Fatalf("mismatch:\nbash: rc=%d %q\ngosh: rc=%d %q (stderr %q)", want.code, want.stdout, got.code, got.stdout, got.stderr)
+				}
+			})
+		}
+	}
+}
+
 func TestDifferentialNonInteractiveStdin(t *testing.T) {
 	script := []string{
 		"read value",
