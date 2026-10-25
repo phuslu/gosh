@@ -20,11 +20,17 @@ type keyBindingManager struct {
 	mu      sync.RWMutex
 	entries map[string]*goKeyBindingEntry
 	actions map[rune]func(rune) bool
+	// runCommand runs the shell command of a "bind -x" binding; see
+	// Shell.runBindCommand.
+	runCommand func(command string)
 }
 
 type goKeyBindingEntry struct {
 	seq    []byte
 	action rune
+	// command is the shell command a "bind -x" binding runs, with action
+	// keyActionShellCommand.
+	command string
 }
 
 const (
@@ -78,13 +84,14 @@ func (m *keyBindingManager) handleBind(args []string, out io.Writer) error {
 				}
 			case 'p':
 				m.printBindings(out)
+			case 'X':
+				m.printCommandBindings(out)
 			case 'P':
 				for _, entry := range bindActions {
 					m.printFunctionKeys(out, entry.names[0], "%s can be found on %s.\n")
 				}
-			case 's', 'S', 'v', 'V', 'X':
-				// Macros, readline variables and shell commands: gosh has
-				// none to list.
+			case 's', 'S', 'v', 'V':
+				// Macros and readline variables: gosh has none to list.
 			case 'm':
 				if _, err := value(); err != nil {
 					return err
@@ -131,10 +138,13 @@ func (m *keyBindingManager) handleBind(args []string, out io.Writer) error {
 					return err
 				}
 			case 'x':
-				if _, err := value(); err != nil {
+				spec, err := value()
+				if err != nil {
 					return err
 				}
-				return fmt.Errorf("bind: -x: binding keys to shell commands is not supported")
+				if err := m.bindCommand(spec); err != nil {
+					return err
+				}
 			default:
 				return builtinUsagef("bind: -%c: invalid option\n%s", opt, bindUsage)
 			}
@@ -173,6 +183,43 @@ func (m *keyBindingManager) bindLine(line string) error {
 	}
 	m.store(seq, actionRune)
 	return nil
+}
+
+// bindCommand binds a key sequence to a shell command, given as
+// "keyseq: command", for "bind -x".
+func (m *keyBindingManager) bindCommand(spec string) error {
+	keySpec, command, err := parseBindArgs([]string{spec})
+	if err != nil {
+		return fmt.Errorf("bind: %s: missing colon separator", spec)
+	}
+	seq, err := parseKeySequence(keySpec)
+	if err != nil {
+		return err
+	}
+	if len(seq) == 0 {
+		return fmt.Errorf("bind: empty key sequence")
+	}
+	m.mu.Lock()
+	m.entries[string(seq)] = &goKeyBindingEntry{seq: seq, action: keyActionShellCommand, command: trimOuterQuotes(command)}
+	m.mu.Unlock()
+	return nil
+}
+
+// printCommandBindings lists the "bind -x" bindings as "bind -X" does.
+func (m *keyBindingManager) printCommandBindings(out io.Writer) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var lines []string
+	for _, entry := range m.entries {
+		if entry.action == keyActionShellCommand {
+			command := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(entry.command)
+			lines = append(lines, fmt.Sprintf("\"%s\": \"%s\"", keySequenceSpec(entry.seq), command))
+		}
+	}
+	slices.Sort(lines)
+	for _, line := range lines {
+		fmt.Fprintln(out, line)
+	}
 }
 
 // bindFile applies the lines of a readline init file, as "bind -f" does.
@@ -276,6 +323,8 @@ const (
 	keyActionForwardWord
 	keyActionBackwardKillWord
 	keyActionDeleteChar
+	// keyActionShellCommand runs the command of a "bind -x" binding.
+	keyActionShellCommand
 )
 
 // bindActions is the single source of truth for the functions bind
@@ -409,31 +458,28 @@ func (m *keyBindingManager) invokeAction(action rune) bool {
 	return handler(action)
 }
 
-func (m *keyBindingManager) match(buf []byte) (rune, int, bool) {
+// match returns the binding whose key sequence starts buf, the longest one,
+// or reports that buf could still become the start of one.
+func (m *keyBindingManager) match(buf []byte) (*goKeyBindingEntry, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if len(m.entries) == 0 {
-		return 0, 0, false
-	}
 	needMore := false
-	var matched rune
-	var matchedLen int
+	var matched *goKeyBindingEntry
 	for _, entry := range m.entries {
 		seq := entry.seq
 		switch {
 		case len(buf) >= len(seq) && bytes.Equal(buf[:len(seq)], seq):
-			if len(seq) > matchedLen {
-				matched = entry.action
-				matchedLen = len(seq)
+			if matched == nil || len(seq) > len(matched.seq) {
+				matched = entry
 			}
 		case len(buf) < len(seq) && bytes.Equal(seq[:len(buf)], buf):
 			needMore = true
 		}
 	}
-	if matchedLen > 0 {
-		return matched, matchedLen, false
+	if matched != nil {
+		return matched, false
 	}
-	return 0, 0, needMore
+	return nil, needMore
 }
 
 func parseBindArgs(args []string) (string, string, error) {
@@ -546,6 +592,9 @@ type keyBindingInput struct {
 	tmp [64]byte
 
 	needMore bool
+	// flushFirst reports that processing stopped at a "bind -x" key to
+	// hand readline the keys before it first.
+	flushFirst bool
 }
 
 const keyBindingPrefixTimeout = 50 * time.Millisecond
@@ -555,6 +604,10 @@ type readDeadliner interface {
 }
 
 func (r *keyBindingInput) Read(p []byte) (int, error) {
+	if r.flushFirst && len(r.out) == 0 {
+		r.flushFirst = false
+		r.needMore = r.processBuffer()
+	}
 	for len(r.out) == 0 {
 		var deadliner readDeadliner
 		deadlineSet := false
@@ -610,14 +663,25 @@ func isReadTimeout(err error) bool {
 
 func (r *keyBindingInput) processBuffer() bool {
 	for len(r.buf) > 0 {
-		action, size, needMore := r.mgr.match(r.buf)
-		if size > 0 {
-			handled := r.mgr.invokeAction(action)
-			r.buf = r.buf[size:]
+		entry, needMore := r.mgr.match(r.buf)
+		if entry != nil {
+			if entry.action == keyActionShellCommand {
+				if len(r.out) > 0 {
+					// Readline has to see the keys before it first, so
+					// that the command gets the line they make.
+					r.flushFirst = true
+					return false
+				}
+				r.buf = r.buf[len(entry.seq):]
+				r.mgr.runShellCommand(entry.command)
+				continue
+			}
+			handled := r.mgr.invokeAction(entry.action)
+			r.buf = r.buf[len(entry.seq):]
 			if !handled {
 				// Hand readline what runs the function. Actions that only
 				// exist as a registered handler have nothing to send.
-				r.out = append(r.out, bindActionEmit[action]...)
+				r.out = append(r.out, bindActionEmit[entry.action]...)
 			}
 			continue
 		}
@@ -628,4 +692,20 @@ func (r *keyBindingInput) processBuffer() bool {
 		r.buf = r.buf[1:]
 	}
 	return false
+}
+
+// setCommandRunner sets what runs the commands of "bind -x" bindings.
+func (m *keyBindingManager) setCommandRunner(run func(command string)) {
+	m.mu.Lock()
+	m.runCommand = run
+	m.mu.Unlock()
+}
+
+func (m *keyBindingManager) runShellCommand(command string) {
+	m.mu.RLock()
+	run := m.runCommand
+	m.mu.RUnlock()
+	if run != nil {
+		run(command)
+	}
 }

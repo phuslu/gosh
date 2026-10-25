@@ -21,6 +21,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/phuslu/gosh/internal/readline"
 	"mvdan.cc/sh/v3/expand"
@@ -398,6 +399,42 @@ func (s *Shell) syncHistoryConfig() {
 	s.history.configure(cfg)
 }
 
+// runBindCommand runs the shell command of a "bind -x" binding as Bash
+// does: off the line being edited, with the terminal out of raw mode, and
+// with READLINE_LINE and READLINE_POINT holding the line and the cursor's
+// byte offset, which the command may change. It runs while readline waits
+// for input, so the interpreter is otherwise idle.
+func (s *Shell) runBindCommand(ctx context.Context, rl *readline.Instance, edit *historySearch, command string) {
+	prog, err := syntax.NewParser().Parse(strings.NewReader(command), "bind -x")
+	if err != nil {
+		fmt.Fprintln(rl.Stderr(), "gosh:", err)
+		return
+	}
+	line, pos := edit.current()
+	pos = min(max(pos, 0), len(line))
+	cfg := rl.GetConfig()
+	_ = cfg.FuncExitRaw()
+	// Clear the line on the terminal itself: rl.Stdout would redraw the
+	// prompt after it.
+	fmt.Fprint(cfg.Stdout, "\r\x1b[K")
+	quoted, _ := syntax.Quote(string(line), syntax.LangBash)
+	_ = s.runner.Run(ctx, parseStmt(fmt.Sprintf("READLINE_LINE=%s READLINE_POINT=%d 2>&-", quoted, len(string(line[:pos])))))
+	s.expandAliases(prog.Stmts...)
+	if err := s.runStatements(ctx, prog.Stmts); err != nil && !IsExitStatus(err) {
+		fmt.Fprintln(rl.Stderr(), err)
+	}
+	newLine, _ := runnerStringVar(s.runner, "READLINE_LINE")
+	point, _ := runnerStringVar(s.runner, "READLINE_POINT")
+	_ = s.runner.Run(ctx, parseStmt("unset READLINE_LINE READLINE_POINT 2>&-"))
+	_ = cfg.FuncMakeRaw()
+	offset, err := strconv.Atoi(point)
+	if err != nil || offset < 0 {
+		offset = 0
+	}
+	offset = min(offset, len(newLine))
+	edit.replace([]rune(newLine), utf8.RuneCountInString(newLine[:offset]))
+}
+
 // runPromptCommand runs PROMPT_COMMAND before a primary prompt as Bash does:
 // in the shell itself, each element in turn when it is an array, and with
 // $? left at status, the status of the last command line. It reports
@@ -587,6 +624,10 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 	s.history.resync()
 	completer.attach(rl)
 	historySearch.Attach(rl)
+	s.bindings.setCommandRunner(func(command string) {
+		s.runBindCommand(ctx, rl, historySearch, command)
+	})
+	defer s.bindings.setCommandRunner(nil)
 	readlineColumns := func() int {
 		if width, _ := rl.GetConfig().FuncGetSize(); width > 0 {
 			return width

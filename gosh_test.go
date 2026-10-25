@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1621,5 +1622,38 @@ func TestBindOptions(t *testing.T) {
 	in := &keyBindingInput{src: strings.NewReader("a\x18b"), mgr: m}
 	if got, err := io.ReadAll(in); err != nil || string(got) != "a\x1bbb" {
 		t.Fatalf("input = %q, %v", got, err)
+	}
+}
+
+func TestBindShellCommand(t *testing.T) {
+	m := &keyBindingManager{entries: make(map[string]*goKeyBindingEntry)}
+	if err := m.handleBind([]string{"-x", `"\C-g": echo "hi"`}, io.Discard); err != nil {
+		t.Fatalf("bind -x failed: %v", err)
+	}
+	var out bytes.Buffer
+	if err := m.handleBind([]string{"-X"}, &out); err != nil || out.String() != `"\C-g": "echo \"hi\""`+"\n" {
+		t.Fatalf("bind -X = %q, %v", out.String(), err)
+	}
+	if err := m.handleBind([]string{"-p"}, &out); err != nil || strings.Contains(out.String(), "\n\"") {
+		t.Fatalf("bind -p listed the command binding: %q", out.String())
+	}
+
+	// The keys typed before the binding reach readline before the command
+	// runs, and the ones after it only once it ran.
+	var events []string
+	in := &keyBindingInput{src: strings.NewReader("ab\x07c"), mgr: m}
+	m.setCommandRunner(func(command string) { events = append(events, "run "+command) })
+	buf := make([]byte, 16)
+	for {
+		n, err := in.Read(buf)
+		if n > 0 {
+			events = append(events, "read "+string(buf[:n]))
+		}
+		if err != nil {
+			break
+		}
+	}
+	if want := []string{"read ab", `run echo "hi"`, "read c"}; !slices.Equal(events, want) {
+		t.Fatalf("events = %q, want %q", events, want)
 	}
 }

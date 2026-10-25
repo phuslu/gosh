@@ -127,6 +127,24 @@ func (h *historySearch) applySearch(action rune) bool {
 	return true
 }
 
+// current returns the line being edited and the cursor position.
+func (h *historySearch) current() ([]rune, int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]rune(nil), h.line...), h.pos
+}
+
+// replace sets the line being edited and the cursor position, in readline
+// too.
+func (h *historySearch) replace(line []rune, pos int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.setReadlineBuffer(line, pos) {
+		h.line = append(h.line[:0], line...)
+		h.pos = pos
+	}
+}
+
 func (h *historySearch) setReadlineBuffer(line []rune, pos int) bool {
 	if h.setBuffer != nil {
 		return h.setBuffer(h.rl, line, pos)
