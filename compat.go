@@ -3,10 +3,14 @@ package gosh
 import (
 	"context"
 	"fmt"
+	"io"
+	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // callDeps carries the shell-owned state that compatibility interceptors
@@ -23,6 +27,8 @@ type callDeps struct {
 	// hasBackend reports that a Backend runs commands, so host fallbacks
 	// such as the wget builtin must stay out of the way.
 	hasBackend bool
+	// start is when the shell started, for printf's %(fmt)T with -2.
+	start time.Time
 }
 
 // Sentinel command names. The call middleware rewrites an intercepted builtin
@@ -41,6 +47,7 @@ const (
 	completeCommand = "__gosh_complete"
 	compgenCommand  = "__gosh_compgen"
 	compoptCommand  = "__gosh_compopt"
+	printfCommand   = "__gosh_printf"
 )
 
 // compatBuiltin is one Bash builtin that gosh rewrites before the
@@ -168,8 +175,71 @@ func (d callDeps) functionDefined(name string) bool {
 	return r != nil && r.Funcs[name] != nil
 }
 
+// rewritePrintf replaces the interpreter's printf with shellPrintf. Plain
+// printf runs as a sentinel; "printf -v name" formats here and assigns
+// through eval, so that like Bash it sets a local variable of that name if
+// there is one, or an array element.
 func (d callDeps) rewritePrintf(ctx context.Context, argv []string) ([]string, bool) {
-	return dropPrintfDashDash(argv)
+	hc := interp.HandlerCtx(ctx)
+	args := argv[1:]
+	name := ""
+	for len(args) > 0 {
+		switch {
+		case args[0] == "--":
+			args = args[1:]
+		case args[0] == "-v" && len(args) > 1:
+			name, args = args[1], args[2:]
+			continue
+		case strings.HasPrefix(args[0], "-v") && len(args[0]) > 2:
+			name, args = args[0][2:], args[1:]
+			continue
+		case len(args[0]) > 1 && args[0][0] == '-':
+			fmt.Fprintf(hc.Stderr, "printf: %s: invalid option\n%s\n", args[0], printfUsage)
+			return []string{"__gosh_printf_usage"}, true
+		}
+		break
+	}
+	if len(args) == 0 {
+		fmt.Fprintln(hc.Stderr, printfUsage)
+		return []string{"__gosh_printf_usage"}, true
+	}
+	if name == "" {
+		return sentinelArgs(printfCommand, args), true
+	}
+	if !printfVarName.MatchString(name) {
+		fmt.Fprintf(hc.Stderr, "printf: `%s': not a valid identifier\n", name)
+		return []string{"false"}, true
+	}
+	out, failed := runShellPrintf(hc.Stderr, args, d.start)
+	quoted, err := syntax.Quote(out, syntax.LangBash)
+	if err != nil {
+		// Only a NUL byte cannot be quoted, and Bash drops it too.
+		quoted, _ = syntax.Quote(strings.ReplaceAll(out, "\x00", ""), syntax.LangBash)
+	}
+	script := name + "=" + quoted
+	if failed {
+		script += "\nfalse"
+	}
+	return []string{"eval", script}, true
+}
+
+const printfUsage = "printf: usage: printf [-v var] format [arguments]"
+
+// printfVarName matches the names "printf -v" assigns: a variable name with
+// an optional array subscript.
+var printfVarName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?$`)
+
+// runShellPrintf formats with shellPrintf, reports its errors to stderr and
+// returns the output and whether printf failed.
+func runShellPrintf(stderr io.Writer, args []string, start time.Time) (string, bool) {
+	out, errs, fatal := shellPrintf(args[0], args[1:], start)
+	for _, msg := range errs {
+		fmt.Fprintf(stderr, "printf: %s\n", msg)
+	}
+	if fatal != nil {
+		fmt.Fprintf(stderr, "printf: %v\n", fatal)
+	}
+	return out, len(errs) > 0 || fatal != nil
 }
 
 func (d callDeps) rewriteSet(ctx context.Context, argv []string) ([]string, bool) {
@@ -274,6 +344,17 @@ func sentinelArgs(name string, args []string) []string {
 // into sentinel commands. Returning an error is how a builtin reports a
 // non-zero exit status; interp.ExitStatus values pass through unchanged.
 var sentinelBuiltins = map[string]func(ctx context.Context, d callDeps, args []string) error{
+	printfCommand: func(ctx context.Context, d callDeps, args []string) error {
+		hc := interp.HandlerCtx(ctx)
+		out, failed := runShellPrintf(hc.Stderr, args, d.start)
+		if _, err := io.WriteString(hc.Stdout, out); err != nil || failed {
+			return interp.ExitStatus(1)
+		}
+		return nil
+	},
+	"__gosh_printf_usage": func(ctx context.Context, d callDeps, args []string) error {
+		return interp.ExitStatus(2)
+	},
 	shoptCommand: func(ctx context.Context, d callDeps, args []string) error {
 		var r *interp.Runner
 		if d.runner != nil {

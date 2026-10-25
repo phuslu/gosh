@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/phuslu/gosh/internal/readline"
 	"mvdan.cc/sh/v3/expand"
@@ -229,6 +230,7 @@ func (s *Shell) initialize() error {
 		aliases:    s.aliases,
 		exitTrap:   s.exitTrap,
 		hasBackend: s.cfg.Backend != nil,
+		start:      time.Now(),
 	}
 	opts = append(opts, interp.CallHandler(callHandler(deps)))
 	opts = append(opts, interp.ExecHandlers(execHandler(deps, backendExec(s.cfg.Backend))))

@@ -282,18 +282,6 @@ func fcOffset(spec string, base, n int) (int, error) {
 	return off, nil
 }
 
-// dropPrintfDashDash strips the leading "--" that Bash's printf accepts as an
-// end-of-options marker but mvdan.cc/sh treats as a format string.
-func dropPrintfDashDash(args []string) ([]string, bool) {
-	if len(args) < 2 || args[1] != "--" {
-		return nil, false
-	}
-	next := make([]string, 1, len(args)-1)
-	next[0] = args[0]
-	next = append(next, args[2:]...)
-	return next, true
-}
-
 // builtinWget downloads one URL into dir, the shell's working directory,
 // and returns the name of the file it saved.
 func builtinWget(ctx context.Context, args []string, dir string, out io.Writer) (string, error) {
