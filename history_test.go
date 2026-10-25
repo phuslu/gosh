@@ -528,3 +528,17 @@ func TestHistoryFileWriteCreatesMissingFile(t *testing.T) {
 		t.Fatalf("history file = %q, want %q", got, want)
 	}
 }
+
+func TestHistoryDeleteResyncsReadline(t *testing.T) {
+	h := &history{cfg: historyConfig{inMemoryLimit: -1}}
+	var synced []string
+	h.resync = func() { synced = h.Entries() }
+	h.append("echo secret")
+	h.append("history -d 1")
+	if !h.Delete(1) {
+		t.Fatal("Delete(1) failed")
+	}
+	if !slices.Equal(synced, []string{"history -d 1"}) {
+		t.Fatalf("readline history after delete = %q, want the secret gone", synced)
+	}
+}

@@ -577,17 +577,25 @@ func (h *history) Delete(pos int) bool {
 		return false
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if pos < 0 {
 		pos = len(h.entries) + pos + 1
 	} else {
 		pos -= h.base
 	}
 	if pos < 1 || pos > len(h.entries) {
+		h.mu.Unlock()
 		return false
+	}
+	if pos == len(h.entries) {
+		h.lastAdded = false
 	}
 	h.entries = append(h.entries[:pos-1], h.entries[pos:]...)
 	h.unsaved = max(h.unsaved-1, 0)
+	h.mu.Unlock()
+	// The up-arrow history must not bring the entry back.
+	if h.resync != nil {
+		h.resync()
+	}
 	return true
 }
 
