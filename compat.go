@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -31,6 +34,9 @@ type callDeps struct {
 	hasBackend bool
 	// start is when the shell started, for printf's %(fmt)T with -2.
 	start time.Time
+	// errorPrefix is what Bash puts before an error at pos: its name and,
+	// unless it is interactive, the script and line.
+	errorPrefix func(pos syntax.Pos) string
 }
 
 // Sentinel command names. The call middleware rewrites an intercepted builtin
@@ -448,9 +454,49 @@ func execHandler(deps callDeps, execBackend interp.ExecHandlerFunc) func(interp.
 			if execBackend != nil {
 				return execBackend(ctx, args)
 			}
+			if len(args) > 0 {
+				if err := checkCommand(ctx, deps, args[0]); err != nil {
+					return err
+				}
+			}
 			return next(ctx, args)
 		}
 	}
+}
+
+// checkCommand reports, like Bash, a command that cannot run: one not found
+// in $PATH, a path that does not exist, a directory or a file without
+// execute permission, with Bash's status of 127 or 126.
+func checkCommand(ctx context.Context, deps callDeps, name string) error {
+	hc := interp.HandlerCtx(ctx)
+	fail := func(status int, msg string) error {
+		prefix := "gosh: "
+		if deps.errorPrefix != nil {
+			prefix = deps.errorPrefix(hc.Pos)
+		}
+		fmt.Fprintf(hc.Stderr, "%s%s: %s\n", prefix, name, msg)
+		return interp.ExitStatus(status)
+	}
+	if !strings.ContainsRune(name, '/') && !(runtime.GOOS == "windows" && strings.ContainsRune(name, '\\')) {
+		if _, err := interp.LookPathDir(hc.Dir, hc.Env, name); err != nil {
+			return fail(127, "command not found")
+		}
+		return nil
+	}
+	path := name
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(hc.Dir, path)
+	}
+	info, err := os.Stat(path)
+	switch {
+	case err != nil:
+		return fail(127, strerror(errors.Unwrap(err)))
+	case info.IsDir():
+		return fail(126, "Is a directory")
+	case runtime.GOOS != "windows" && info.Mode()&0o111 == 0:
+		return fail(126, "Permission denied")
+	}
+	return nil
 }
 
 // strerror describes err like C's strerror, which starts with a capital.

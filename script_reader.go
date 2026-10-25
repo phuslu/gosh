@@ -166,6 +166,8 @@ func scriptStdin(stdin io.Reader) (*os.File, func(), error) {
 // is $0 and is used in syntax errors. The script's EXIT trap runs once, when
 // it ends; see exitTrap.
 func (s *Shell) runScript(ctx context.Context, r *scriptReader, name string) error {
+	defer func(prev string) { s.scriptName = prev }(s.scriptName)
+	s.scriptName = name
 	s.exitTrap.hold(true)
 	defer s.exitTrap.hold(false)
 	parser := syntax.NewParser()
@@ -215,6 +217,8 @@ func (s *Shell) finishScript(ctx context.Context, name string, status int) error
 // at a time, like Bash: a syntax error ends the file but not the shell, the
 // commands' exit statuses are not errors, and "exit" ends the shell.
 func (s *Shell) runInitFile(ctx context.Context, file *os.File) {
+	defer func(prev string) { s.scriptName = prev }(s.scriptName)
+	s.scriptName = file.Name()
 	parser := syntax.NewParser()
 	for stmts, err := range parser.InteractiveSeq(newScriptReader(file)) {
 		if err != nil {

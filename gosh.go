@@ -102,6 +102,9 @@ type Shell struct {
 	promptCache *promptCache
 	rl          *readline.Instance
 
+	// scriptName names the script or startup file running, for errors.
+	scriptName string
+
 	hostname     string
 	homeFallback string
 	userFallback string
@@ -223,15 +226,16 @@ func (s *Shell) initialize() error {
 	s.promptCache = newPromptCache()
 
 	deps := callDeps{
-		runner:     func() *interp.Runner { return s.runner },
-		history:    s.history,
-		bindings:   s.bindings,
-		completion: s.completion,
-		opts:       s.opts,
-		aliases:    s.aliases,
-		exitTrap:   s.exitTrap,
-		hasBackend: s.cfg.Backend != nil,
-		start:      time.Now(),
+		runner:      func() *interp.Runner { return s.runner },
+		history:     s.history,
+		bindings:    s.bindings,
+		completion:  s.completion,
+		opts:        s.opts,
+		aliases:     s.aliases,
+		exitTrap:    s.exitTrap,
+		hasBackend:  s.cfg.Backend != nil,
+		start:       time.Now(),
+		errorPrefix: s.errorPrefix,
 	}
 	opts = append(opts, interp.CallHandler(callHandler(deps)))
 	opts = append(opts, interp.ExecHandlers(execHandler(deps, backendExec(s.cfg.Backend))))
@@ -433,6 +437,22 @@ func (s *Shell) runBindCommand(ctx context.Context, rl *readline.Instance, edit 
 	}
 	offset = min(offset, len(newLine))
 	edit.replace([]rune(newLine), utf8.RuneCountInString(newLine[:offset]))
+}
+
+// errorPrefix is what Bash puts before an error at pos: "gosh: " in an
+// interactive shell, and the script's name and the line otherwise.
+func (s *Shell) errorPrefix(pos syntax.Pos) string {
+	if s.rl != nil {
+		return "gosh: "
+	}
+	name := s.scriptName
+	if name == "" {
+		name = "gosh"
+	}
+	if line := pos.Line(); line > 0 {
+		return fmt.Sprintf("%s: line %d: ", name, line)
+	}
+	return name + ": "
 }
 
 // runPromptCommand runs PROMPT_COMMAND before a primary prompt as Bash does:

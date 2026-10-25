@@ -2,8 +2,11 @@ package gosh
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -63,5 +66,36 @@ func TestDynamicVariables(t *testing.T) {
 	}
 	if got, want := stdout.String(), "seconds\nepoch\nrealtime\nbashpid\n500\nunset\n0\n"; got != want {
 		t.Fatalf("stdout = %q, want %q\nstderr: %s", got, want, stderr.String())
+	}
+}
+
+// TestDifferentialCommandErrors compares how commands that cannot run are
+// reported, with the shell's own name made the same.
+func TestDifferentialCommandErrors(t *testing.T) {
+	requireBash(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("no execute permission bits on Windows")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "notexec"), []byte("echo hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "script.sh"), []byte("echo a\n\nnosuch\nf() { ./notexec; }\nf\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"-c", `nosuch; echo rc=$?; ./notexec; echo rc=$?; /; echo rc=$?; ./missing; echo rc=$?; nosuch/x; echo rc=$?`},
+		{"-c", "echo a\nnosuch"},
+		{"script.sh"},
+	} {
+		t.Run(args[len(args)-1], func(t *testing.T) {
+			want := runDifferentialShell(t, "bash", append([]string{"--norc"}, args...), nil, nil, dir)
+			got := runDifferentialShell(t, testGoshBinary, args, nil, nil, dir)
+			wantErr := strings.ReplaceAll(want.stderr, "bash: ", "gosh: ")
+			gotErr := strings.ReplaceAll(got.stderr, testGoshBinary+": ", "gosh: ")
+			if got.stdout != want.stdout || got.code != want.code || gotErr != wantErr {
+				t.Fatalf("mismatch:\nbash: rc=%d %q %q\ngosh: rc=%d %q %q", want.code, want.stdout, wantErr, got.code, got.stdout, gotErr)
+			}
+		})
 	}
 }
