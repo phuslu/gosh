@@ -18,6 +18,9 @@ func TestDifferentialBuiltins(t *testing.T) {
 		`umask; umask -S; umask -p; umask -pS; umask 027; umask; umask g+w,o=r; umask -S; umask a-x; umask -S`,
 		`umask 9; echo rc=$?; umask u=xyz; echo rc=$?; umask -z; echo rc=$?`,
 		`umask 077; : > f; ls -l f | cut -c1-10; umask 022; : > g; ls -l g | cut -c1-10`,
+		`ulimit; ulimit -a; ulimit -n; ulimit -Sn; ulimit -Hn; ulimit -H -c -n`,
+		`ulimit -n 512; ulimit -n; ulimit -S -n 256; ulimit -Sn; ulimit -Hn; ulimit -n soft; ulimit -Hn; sh -c 'ulimit -n'`,
+		`ulimit -p 1; echo rc=$?; ulimit -z; echo rc=$?; ulimit -n abc; echo rc=$?; ulimit -t unlimited; ulimit -t`,
 	} {
 		t.Run(script, func(t *testing.T) {
 			dir := t.TempDir()

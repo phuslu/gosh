@@ -49,6 +49,7 @@ const (
 	compgenCommand  = "__gosh_compgen"
 	compoptCommand  = "__gosh_compopt"
 	umaskCommand    = "__gosh_umask"
+	ulimitCommand   = "__gosh_ulimit"
 	printfCommand   = "__gosh_printf"
 )
 
@@ -77,6 +78,7 @@ var compatBuiltins = map[string]compatBuiltin{
 	"unalias":  {shadowable: true, rewrite: callDeps.rewriteUnalias},
 	"trap":     {shadowable: true, rewrite: callDeps.rewriteTrap},
 	"umask":    {shadowable: true, rewrite: sentinelRewrite(umaskCommand)},
+	"ulimit":   {shadowable: true, rewrite: sentinelRewrite(ulimitCommand)},
 	"set":      {rewrite: callDeps.rewriteSet},
 	"history":  {rewrite: callDeps.rewriteHistory},
 	"fc":       {rewrite: callDeps.rewriteFc},
@@ -354,6 +356,9 @@ func sentinelArgs(name string, args []string) []string {
 // into sentinel commands. Returning an error is how a builtin reports a
 // non-zero exit status; interp.ExitStatus values pass through unchanged.
 var sentinelBuiltins = map[string]func(ctx context.Context, d callDeps, args []string) error{
+	ulimitCommand: func(ctx context.Context, d callDeps, args []string) error {
+		return builtinStatus(ctx, builtinUlimit(args, interp.HandlerCtx(ctx).Stdout))
+	},
 	umaskCommand: func(ctx context.Context, d callDeps, args []string) error {
 		return builtinStatus(ctx, builtinUmask(args, interp.HandlerCtx(ctx).Stdout))
 	},
