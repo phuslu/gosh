@@ -1188,7 +1188,7 @@ func TestShoptListMatchesUpstream(t *testing.T) {
 		}
 
 		var got bytes.Buffer
-		printShoptOptions(&got, newShellOptions(false), posix)
+		printShoptOptions(&got, newShellOptions(false), posix, false)
 		gotEntries := shoptListingEntries(got.String())
 		wantEntries := shoptListingEntries(upstreamOut.String())
 		if !reflect.DeepEqual(gotEntries, wantEntries) {

@@ -10,6 +10,7 @@ import (
 
 type shoptArgs struct {
 	quiet       bool
+	reusable    bool // -p
 	posix       bool
 	mode        string
 	invalid     string
@@ -65,7 +66,7 @@ func (p *shoptFlagParser) args() []string {
 
 func shouldHandleShopt(args []string) bool {
 	parsed := parseShoptArgs(args)
-	if parsed.quiet {
+	if parsed.quiet || parsed.reusable {
 		return true
 	}
 	if parsed.unsupported != "" || parsed.invalid != "" {
@@ -96,8 +97,7 @@ func parseShoptArgs(args []string) shoptArgs {
 			parsed.posix = true
 			parsed.forward = append(parsed.forward, flag)
 		case "-p":
-			parsed.unsupported = flag
-			return parsed
+			parsed.reusable = true
 		default:
 			parsed.invalid = flag
 			return parsed
@@ -139,7 +139,7 @@ func runShopt(ctx context.Context, runner *interp.Runner, opts *shellOptions, ar
 		if parsed.quiet {
 			return nil
 		}
-		printShoptOptions(hc.Stdout, opts, parsed.posix)
+		printShoptOptions(hc.Stdout, opts, parsed.posix, parsed.reusable)
 		return nil
 	}
 	for _, arg := range parsed.args {
@@ -154,7 +154,7 @@ func runShopt(ctx context.Context, runner *interp.Runner, opts *shellOptions, ar
 			}
 			continue
 		}
-		printShoptOption(hc.Stdout, opts, parsed.posix, arg)
+		printShoptOption(hc.Stdout, opts, parsed.posix, parsed.reusable, arg)
 	}
 	return nil
 }
@@ -225,21 +225,35 @@ func shoptManagedOption(name string) bool {
 
 func printShoptOptions(w interface {
 	Write([]byte) (int, error)
-}, opts *shellOptions, posix bool) {
+}, opts *shellOptions, posix, reusable bool) {
 	names := shoptBashOptionNames
 	if posix {
 		names = shoptPosixOptionNames
 	}
 	for _, name := range names {
-		printShoptOption(w, opts, posix, name)
+		printShoptOption(w, opts, posix, reusable, name)
 	}
 }
 
 func printShoptOption(w interface {
 	Write([]byte) (int, error)
-}, opts *shellOptions, posix bool, name string) {
+}, opts *shellOptions, posix, reusable bool, name string) {
 	opt, supported, _ := shoptOption(opts, posix, name)
 	if opt == nil {
+		return
+	}
+	if reusable {
+		// Like "shopt -p", as commands that restore the setting.
+		switch {
+		case posix && *opt:
+			fmt.Fprintf(w, "set -o %s\n", name)
+		case posix:
+			fmt.Fprintf(w, "set +o %s\n", name)
+		case *opt:
+			fmt.Fprintf(w, "shopt -s %s\n", name)
+		default:
+			fmt.Fprintf(w, "shopt -u %s\n", name)
+		}
 		return
 	}
 	state := "off"
