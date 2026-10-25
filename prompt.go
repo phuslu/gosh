@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/term"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -52,6 +53,7 @@ type promptEnv struct {
 	homeFallback string
 	userFallback string
 	cache        *promptCache
+	version      string
 }
 
 func (s *Shell) newPromptEnv() *promptEnv {
@@ -74,6 +76,7 @@ func (s *Shell) newPromptEnv() *promptEnv {
 		homeFallback: s.homeFallback,
 		userFallback: s.userFallback,
 		cache:        s.promptCache,
+		version:      s.version,
 	}
 }
 
@@ -281,13 +284,15 @@ const (
 )
 
 type promptToken struct {
-	kind     promptTokenKind
-	text     string
-	escape   byte
-	format   string
-	expr     string
-	raw      string
-	template *promptTemplate
+	kind   promptTokenKind
+	text   string
+	escape byte
+	format string
+	// hasFormat reports that \D came with a {format}, which may be empty.
+	hasFormat bool
+	expr      string
+	raw       string
+	template  *promptTemplate
 }
 
 type promptTemplate struct {
@@ -351,6 +356,7 @@ func (t *promptTemplate) parse() {
 			if next == 'D' && i+2 < len(t.src) && t.src[i+2] == '{' {
 				if end := strings.IndexByte(t.src[i+3:], '}'); end >= 0 {
 					token.format = t.src[i+3 : i+3+end]
+					token.hasFormat = true
 					i = i + 3 + end + 1
 				} else {
 					i += 2
@@ -422,7 +428,7 @@ func (t *promptTemplate) render(state *promptState) string {
 		case promptTokenNonPrinting:
 			b.WriteString(token.template.render(state))
 		case promptTokenEscape:
-			b.WriteString(renderPromptEscape(state, token.escape, token.format))
+			b.WriteString(renderPromptEscape(state, token))
 		case promptTokenParam:
 			if !state.promptvars() {
 				b.WriteString(token.raw)
@@ -459,26 +465,36 @@ func scanPromptNonPrinting(src string, start int) (string, int) {
 	return "", -1
 }
 
-func renderPromptEscape(state *promptState, c byte, format string) string {
-	switch c {
+func renderPromptEscape(state *promptState, token promptToken) string {
+	switch c := token.escape; c {
 	case 'a':
 		return "\a"
-	case 'e', 'E':
+	case 'e':
 		return "\x1b"
 	case 'n':
 		return "\n"
 	case 'r':
 		return "\r"
 	case 't':
-		return state.now.Format("15:04:05")
+		return strftime("%H:%M:%S", state.now)
 	case 'T':
-		return state.now.Format("03:04:05")
+		return strftime("%I:%M:%S", state.now)
 	case '@':
-		return state.now.Format("03:04:05PM")
+		return strftime("%I:%M %p", state.now)
 	case 'A':
-		return state.now.Format("15:04")
+		return strftime("%H:%M", state.now)
 	case 'd':
-		return state.now.Format("Mon Jan 02")
+		return strftime("%a %b %d", state.now)
+	case 'D':
+		if !token.hasFormat {
+			return `\D`
+		}
+		format := token.format
+		if format == "" {
+			// Like Bash, an empty format is the locale's time.
+			format = "%X"
+		}
+		return strftime(format, state.now)
 	case 's':
 		return "gosh"
 	case 'u':
@@ -488,13 +504,11 @@ func renderPromptEscape(state *promptState, c byte, format string) string {
 	case 'H':
 		return state.host
 	case 'w':
-		return state.displayPwd()
+		return state.trimmedPwd()
 	case 'W':
 		return filepath.Base(state.displayPwd())
-	case 'D':
-		if format != "" {
-			return state.formatTime(format)
-		}
+	case 'l':
+		return promptTerminalName()
 	case '#':
 		return fmt.Sprintf("%d", state.seq)
 	case '!':
@@ -504,11 +518,34 @@ func renderPromptEscape(state *promptState, c byte, format string) string {
 	case '$':
 		return state.promptSymbol()
 	case 'j':
+		// gosh has no job control, so there are never any jobs.
 		return "0"
-	case 'v', 'V':
-		return "gosh"
+	case 'v':
+		// Like Bash's \v, the version without its patch level.
+		version := state.version()
+		if i := strings.LastIndexByte(version, '.'); i > 0 && strings.Count(version, ".") > 1 {
+			version = version[:i]
+		}
+		return version
+	case 'V':
+		return state.version()
+	default:
+		// Like Bash, an unknown escape stays as it is.
+		return "\\" + string(c)
 	}
-	return string(c)
+}
+
+// promptTerminalName returns what \l shows: the basename of the terminal
+// on stdin, or "tty" without one. A variable so that tests can pin it.
+var promptTerminalName = func() string {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return "tty"
+	}
+	name, err := os.Readlink("/proc/self/fd/0")
+	if err != nil || !strings.HasPrefix(name, "/dev/") {
+		return "tty"
+	}
+	return filepath.Base(name)
 }
 
 func scanPromptName(src string, start int) (string, int) {
@@ -609,6 +646,50 @@ func skipPromptArithmetic(src string, start int) (int, bool) {
 	return end + 1, true
 }
 
+// version is the gosh version, as \V shows it.
+func (p *promptState) version() string {
+	if p.env == nil || p.env.version == "" {
+		return "0.0.0"
+	}
+	return p.env.version
+}
+
+// trimmedPwd is \w: the working directory with ~ for the home directory,
+// shortened to its last PROMPT_DIRTRIM components like Bash's
+// trim_pathname: the components before them, not counting a leading "~/",
+// become "..." when that makes the path shorter.
+func (p *promptState) trimmedPwd() string {
+	dir := p.displayPwd()
+	n, err := strconv.Atoi(p.shellVar("PROMPT_DIRTRIM"))
+	if err != nil || n <= 0 {
+		return dir
+	}
+	begin := 0
+	if strings.HasPrefix(dir, "~") {
+		if i := strings.IndexByte(dir, '/'); i >= 0 {
+			begin = i + 1
+		} else {
+			begin = len(dir)
+		}
+	}
+	if strings.Count(dir[begin:], "/") <= n {
+		return dir
+	}
+	tail := len(dir)
+	for slashes := 0; tail > begin; {
+		tail--
+		if dir[tail] == '/' {
+			if slashes++; slashes == n {
+				break
+			}
+		}
+	}
+	if tail-begin <= 3 {
+		return dir
+	}
+	return dir[:begin] + "..." + dir[tail:]
+}
+
 func (p *promptState) displayPwd() string {
 	dir := p.pwd()
 	home := p.home()
@@ -625,51 +706,6 @@ func (p *promptState) displayPwd() string {
 		}
 	}
 	return dir
-}
-
-func (p *promptState) formatTime(layout string) string {
-	var b strings.Builder
-	for i := 0; i < len(layout); i++ {
-		if layout[i] != '%' {
-			b.WriteByte(layout[i])
-			continue
-		}
-		i++
-		if i >= len(layout) {
-			b.WriteByte('%')
-			break
-		}
-		switch layout[i] {
-		case '%':
-			b.WriteByte('%')
-		case 'H':
-			b.WriteString(fmt.Sprintf("%02d", p.now.Hour()))
-		case 'M':
-			b.WriteString(fmt.Sprintf("%02d", p.now.Minute()))
-		case 'S':
-			b.WriteString(fmt.Sprintf("%02d", p.now.Second()))
-		case 'Y':
-			b.WriteString(fmt.Sprintf("%04d", p.now.Year()))
-		case 'm':
-			b.WriteString(fmt.Sprintf("%02d", int(p.now.Month())))
-		case 'd':
-			b.WriteString(fmt.Sprintf("%02d", p.now.Day()))
-		case 'F':
-			b.WriteString(p.now.Format("2006-01-02"))
-		case 'T':
-			b.WriteString(p.now.Format("15:04:05"))
-		case 'R':
-			b.WriteString(p.now.Format("15:04"))
-		case 'z':
-			b.WriteString(p.now.Format("-0700"))
-		case 'Z':
-			b.WriteString(p.now.Format("MST"))
-		default:
-			b.WriteByte('%')
-			b.WriteByte(layout[i])
-		}
-	}
-	return b.String()
 }
 
 func (p *promptState) runCommand(cmd string) string {

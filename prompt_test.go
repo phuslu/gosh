@@ -1,6 +1,8 @@
 package gosh
 
 import (
+	"path"
+	"strings"
 	"testing"
 	"time"
 )
@@ -109,134 +111,51 @@ func TestPromptWorkingDirectoryEscapes(t *testing.T) {
 	}
 }
 
-// TestPromptEscapeKnownDivergences records the PS1 escapes where gosh still
-// differs from bash. Every subtest is skipped on purpose: `want` is what
-// bash 5.3 produces (checked with "${PS1@P}"), so deleting the t.Skip line
-// turns the case into a live test once gosh matches.
-//
-// Two more escapes are hardcoded rather than wrong for gosh and so have no
-// case here: \s is always "gosh" instead of the basename of $0, and \j is
-// always "0" because gosh has no job control.
-func TestPromptEscapeKnownDivergences(t *testing.T) {
+// TestPromptEscapesLikeBash pins more escapes against what bash 5.3
+// produces for the same state, checked with "${PS1@P}". \s is always "gosh"
+// rather than the basename of $0.
+func TestPromptEscapesLikeBash(t *testing.T) {
 	state := newPromptEscapeState()
-	cases := []struct {
-		name   string
-		reason string
-		src    string
-		want   string
-	}{
-		{
-			name: "octal escape",
-			// bash: \nnn inserts the character with that octal value, so
-			// \101 is "A" and \007 is a bell.
-			// gosh: has no octal escape; `\1` renders as "1" and the
-			// remaining digits stay literal, giving "101".
-			reason: "gosh does not implement \\nnn octal escapes",
-			src:    `\101`,
-			want:   "A",
-		},
-		{
-			name: "octal escape bell",
-			// bash: "\007" is the same bell as "\a".
-			// gosh: renders "\x0007" (a NUL byte followed by "07").
-			reason: "gosh does not implement \\nnn octal escapes",
-			src:    `\007`,
-			want:   "\a",
-		},
-		{
-			name: "octal escape nul",
-			// bash: \0 is octal zero, and the NUL is dropped from the
-			// expanded prompt, leaving an empty string.
-			// gosh: emits a literal NUL byte.
-			reason: "gosh emits a NUL byte for \\0",
-			src:    `\0`,
-			want:   "",
-		},
-		{
-			name: "capital E is not an escape",
-			// bash: only \e is the escape character; "\E" stays literal.
-			// gosh: treats \E as another spelling of \e.
-			reason: "gosh expands \\E as ESC",
-			src:    `\E`,
-			want:   `\E`,
-		},
-		{
-			name: "unknown escape keeps its backslash",
-			// bash: an unrecognized escape is emitted verbatim, backslash
-			// included, so "\z" stays "\z".
-			// gosh: drops the backslash and renders just "z".
-			reason: "gosh drops the backslash of an unknown escape",
-			src:    `\z`,
-			want:   `\z`,
-		},
-		{
-			name: "bare D without a format",
-			// bash: "\D" without "{...}" is not an escape and stays literal.
-			// gosh: renders "D".
-			reason: "gosh drops the backslash of a bare \\D",
-			src:    `\D`,
-			want:   `\D`,
-		},
-		{
-			name: "empty D format",
-			// bash: "\D{}" uses the locale's time representation (%X),
-			// which is "13:08:07" for this timestamp in the C locale.
-			// gosh: renders "D".
-			reason: "gosh does not implement the default \\D{} format",
-			src:    `\D{}`,
-			want:   "13:08:07",
-		},
-		{
-			name: "terminal device",
-			// bash: \l is the basename of the terminal device.
-			// gosh: renders "l".
-			reason: "gosh does not implement \\l",
-			src:    `\l`,
-			want:   "tty",
-		},
-		{
-			name: "version escapes",
-			// bash: \v is the version ("5.3") and \V the version with the
-			// patch level ("5.3.9").
-			// gosh: both render the literal string "gosh".
-			reason: "gosh hardcodes \\v and \\V to \"gosh\" instead of its version",
-			src:    `\v \V`,
-			want:   "0.0 0.0.0",
-		},
-		{
-			name: "twelve hour time with am pm",
-			// bash: \@ is "%I:%M %p", so seconds are not shown and there is
-			// a space before the meridiem, e.g. "01:08 PM".
-			// gosh: renders "01:08:07PM".
-			reason: "gosh formats \\@ with seconds and without a space",
-			src:    `\@`,
-			want:   "01:08 PM",
-		},
-		{
-			name: "strftime meridiem",
-			// bash: \D{...} passes the format to strftime, so %p, %I, %a,
-			// %b, %e and %j all work.
-			// gosh: implements only a handful of conversions and copies the
-			// rest through verbatim, e.g. "%p".
-			reason: "gosh's \\D{} implements only a subset of strftime",
-			src:    `\D{%I:%M %p}`,
-			want:   "01:08 PM",
-		},
-		{
-			name: "strftime day of year",
-			// See above; %j is the day of the year.
-			reason: "gosh's \\D{} implements only a subset of strftime",
-			src:    `\D{%j}`,
-			want:   "135",
-		},
-	}
-	for _, tc := range cases {
+	defer func(orig func() string) { promptTerminalName = orig }(promptTerminalName)
+	promptTerminalName = func() string { return "tty" }
+	for _, tc := range []struct{ name, src, want string }{
+		{"octal escape", `\101`, "A"},
+		{"octal escape bell", `\007`, "\a"},
+		{"octal NUL is dropped", `\0`, ""},
+		{"capital E is not an escape", `\E`, `\E`},
+		{"unknown escape keeps its backslash", `\z`, `\z`},
+		{"bare D without a format", `\D`, `\D`},
+		{"empty D format is the time", `\D{}`, "13:08:07"},
+		{"terminal device without one", `\l`, "tty"},
+		{"version escapes", `\v \V`, "0.0 0.0.0"},
+		{"twelve hour time", `\@ \T`, "01:08 PM 01:08:07"},
+		{"date", `\d`, "Fri May 15"},
+		{"strftime meridiem", `\D{%I:%M %p}`, "01:08 PM"},
+		{"strftime day of year", `\D{%j}`, "135"},
+		{"no jobs", `\j`, "0"},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Skipf("known divergence: %s", tc.reason)
-			got := (&promptRenderer{src: tc.src, state: state}).render()
-			if got != tc.want {
+			if got := (&promptRenderer{src: tc.src, state: state}).render(); got != tc.want {
 				t.Fatalf("render(%q) = %q, want %q (bash)", tc.src, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestPromptDirtrim checks \w with PROMPT_DIRTRIM against bash 5.3.
+func TestPromptDirtrim(t *testing.T) {
+	for _, tc := range []struct{ dir, want string }{
+		{"/usr/local/lib/x", ".../lib/x"},
+		{"/usr/local/lib", ".../local/lib"},
+		{"/a/b", "/a/b"},
+		{"/home/alice/a/b/c", "~/a/b/c"},
+		{"/home/alice/a/b/c/d", "~/a/b/c/d"},
+		{"/home/alice/aa/b/c/d", "~/.../c/d"},
+		{"/home/alice", "~"},
+	} {
+		state := &promptState{vars: map[string]string{"HOME": "/home/alice", "PROMPT_DIRTRIM": "2"}, dir: tc.dir}
+		if got := (&promptRenderer{src: `\w|\W`, state: state}).render(); got != tc.want+"|"+path.Base(strings.Replace(tc.dir, "/home/alice", "~", 1)) {
+			t.Errorf("render(\\w|\\W) in %q = %q, want %q", tc.dir, got, tc.want)
+		}
 	}
 }
