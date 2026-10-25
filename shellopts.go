@@ -355,7 +355,7 @@ func posixOptionNameByFlag(flag byte) (string, bool) {
 
 // setFlagsOutsideInterp maps the "set" flags mvdan.cc/sh/v3 does not know to
 // their option names: gosh implements histexpand itself and accepts verbose
-// as a no-op.
+// as a no-op, as it does "set -o history".
 var setFlagsOutsideInterp = map[byte]string{'v': "verbose", 'H': "histexpand"}
 
 // handleSetVerboseOption strips the options in setFlagsOutsideInterp, in
@@ -432,6 +432,10 @@ func setRunnerStringVar(runner *interp.Runner, name, value string) {
 }
 
 func isSetOptionOutsideInterp(name string) bool {
+	if name == "history" {
+		// Command history is always on in gosh.
+		return true
+	}
 	for _, option := range setFlagsOutsideInterp {
 		if option == name {
 			return true

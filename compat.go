@@ -255,9 +255,6 @@ func (d callDeps) rewriteSet(ctx context.Context, argv []string) ([]string, bool
 }
 
 func (d callDeps) rewriteShopt(ctx context.Context, argv []string) ([]string, bool) {
-	if !shouldHandleShopt(argv[1:]) {
-		return nil, false
-	}
 	return sentinelArgs(shoptCommand, argv[1:]), true
 }
 
@@ -401,10 +398,16 @@ var sentinelBuiltins = map[string]func(ctx context.Context, d callDeps, args []s
 }
 
 // builtinStatus turns a builtin's Go error into the exit status Bash would
-// report: 2 for a builtinUsageError, 1 otherwise.
+// report: 2 for a builtinUsageError, the status of an interp.ExitStatus,
+// which is not reported, and 1 otherwise.
 func builtinStatus(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
+	}
+	var status interp.ExitStatus
+	if errors.As(err, &status) {
+		// A status of its own, with nothing to report.
+		return status
 	}
 	fmt.Fprintln(interp.HandlerCtx(ctx).Stderr, err)
 	var usage builtinUsageError

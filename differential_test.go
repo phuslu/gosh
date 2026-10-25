@@ -720,82 +720,30 @@ func TestDifferentialHistoryBuiltin(t *testing.T) {
 	}
 }
 
-// TestDifferentialHistoryBuiltinKnownDivergences records the history builtin
-// features gosh does not implement yet. All subtests are skipped; the
-// comments describe what bash does.
-func TestDifferentialHistoryBuiltinKnownDivergences(t *testing.T) {
+// TestDifferentialHistoryBuiltinScripts compares the history builtin in
+// scripts with Bash.
+func TestDifferentialHistoryBuiltinScripts(t *testing.T) {
 	requireBash(t)
 	env := testEnv(t)
-
-	cases := []struct {
-		name   string
-		reason string
-		script string
-	}{
-		{
-			name: "set -o history",
-			// bash: history is a POSIX shell option; `set -o history` and
-			// `set +o history` toggle it and succeed even non-interactively.
-			// gosh: prints `set: invalid option: "history"` on stderr.
-			reason: "gosh does not implement the history shell option",
-			script: `set -o history; echo one; history`,
-		},
-		{
-			name: "history -s",
-			// bash: `history -s "echo added"` appends the argument to the
-			// history list without executing it; the listing then shows it.
-			// gosh: fails with `history: unsupported argument "-s"`.
-			reason: "gosh does not implement history -s",
-			script: `history -s "echo added"; history`,
-		},
-		{
-			name: "history count argument",
-			// bash: `history 5` lists at most the last five entries.
-			// gosh: fails with `history: unsupported argument "5"`.
-			reason: "gosh does not implement the numeric history argument",
-			script: `printf 'a\nb\nc\n' > hist.in; history -r hist.in; history 2`,
-		},
-		{
-			name: "history -p",
-			// bash: `history -p foo` performs history expansion on its
-			// arguments and prints the result ("foo").
-			// gosh: fails with `history: unsupported argument "-p"`.
-			reason: "gosh does not implement history -p",
-			script: `history -p foo`,
-		},
-		{
-			name: "history -a and -n",
-			// bash: -a appends the new entries to the history file and -n
-			// reads the entries not yet read from it.
-			// gosh: both are rejected as unsupported arguments.
-			reason: "gosh does not implement history -a/-n",
-			script: `history -a hist.out; history -n hist.out`,
-		},
-		{
-			name: "invalid option exit status",
-			// bash: prints its usage line and exits 2.
-			// gosh: prints its own message and exits 1.
-			reason: "gosh exits 1 rather than 2 for a usage error",
-			script: `history -z; echo "rc=$?"`,
-		},
-		{
-			name: "history -r on an empty file",
-			// bash: reading /dev/null yields no entries and exits 1.
-			// gosh: exits 0.
-			reason: "gosh returns 0 when history -r reads nothing",
-			script: `history -r /dev/null; echo "rc=$?"`,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Skipf("known divergence: %s", tc.reason)
-			bashDir := t.TempDir()
-			goshDir := t.TempDir()
-			want := runDifferentialShell(t, "bash", []string{"--noprofile", "--norc", "-c", tc.script}, nil, env, bashDir)
-			got := runDifferentialShell(t, testGoshBinary, []string{"-c", tc.script}, nil, env, goshDir)
+	for _, script := range []string{
+		`set -o history; echo one; set +o history; history`,
+		`history -s "echo added"; history`,
+		`printf 'a\nb\nc\n' > hist.in; history -r hist.in; history 2`,
+		`history -p foo`,
+		`history -s x; history -a hist.out; history -n hist.out; cat hist.out`,
+		`history -z; echo "rc=$?"; history abc; echo "rc=$?"; history -d; echo "rc=$?"; fc -z; echo "rc=$?"`,
+		`history -r /dev/null; echo "rc=$?"`,
+		`shopt -z; echo "rc=$?"; shopt nosuch; echo "rc=$?"; complete -z; echo "rc=$?"; compgen -z; echo "rc=$?"; complete -F; echo "rc=$?"`,
+	} {
+		t.Run(script, func(t *testing.T) {
+			want := runDifferentialShell(t, "bash", []string{"--noprofile", "--norc", "-c", script}, nil, env, t.TempDir())
+			got := runDifferentialShell(t, testGoshBinary, []string{"-c", script}, nil, env, t.TempDir())
 			if got.code != want.code || got.stdout != want.stdout {
 				t.Fatalf("mismatch:\nbash: rc=%d stdout=%q\ngosh: rc=%d stdout=%q stderr=%q",
 					want.code, want.stdout, got.code, got.stdout, got.stderr)
+			}
+			if wantErr := bashErrorPrefix.ReplaceAllString(want.stderr, ""); got.stderr != wantErr {
+				t.Fatalf("stderr mismatch:\nbash: %q\ngosh: %q", wantErr, got.stderr)
 			}
 		})
 	}

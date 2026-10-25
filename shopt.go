@@ -9,14 +9,13 @@ import (
 )
 
 type shoptArgs struct {
-	quiet       bool
-	reusable    bool // -p
-	posix       bool
-	mode        string
-	invalid     string
-	unsupported string
-	args        []string
-	forward     []string
+	quiet    bool
+	reusable bool // -p
+	posix    bool
+	mode     string
+	invalid  string
+	args     []string
+	forward  []string
 }
 
 type shoptFlagParser struct {
@@ -64,25 +63,6 @@ func (p *shoptFlagParser) args() []string {
 	return p.remaining
 }
 
-func shouldHandleShopt(args []string) bool {
-	parsed := parseShoptArgs(args)
-	if parsed.quiet || parsed.reusable {
-		return true
-	}
-	if parsed.unsupported != "" || parsed.invalid != "" {
-		return false
-	}
-	if len(parsed.args) == 0 {
-		return true
-	}
-	// Route option mutations (including upstream-supported ones) through
-	// gosh so its mirrored option state stays in sync with the interpreter.
-	if parsed.mode != "" {
-		return true
-	}
-	return shoptArgsHaveManagedOption(parsed.args)
-}
-
 func parseShoptArgs(args []string) shoptArgs {
 	fp := shoptFlagParser{remaining: args}
 	var parsed shoptArgs
@@ -114,12 +94,8 @@ func parseShoptArgs(args []string) shoptArgs {
 func runShopt(ctx context.Context, runner *interp.Runner, opts *shellOptions, args []string) error {
 	hc := interp.HandlerCtx(ctx)
 	parsed := parseShoptArgs(args)
-	if parsed.unsupported != "" {
-		fmt.Fprintf(hc.Stderr, "shopt: unsupported option %q\n", parsed.unsupported)
-		return interp.ExitStatus(2)
-	}
 	if parsed.invalid != "" {
-		fmt.Fprintf(hc.Stderr, "shopt: invalid option %q\n", parsed.invalid)
+		fmt.Fprintf(hc.Stderr, "shopt: %s: invalid option\nshopt: usage: shopt [-pqsu] [-o] [optname ...]\n", parsed.invalid)
 		return interp.ExitStatus(2)
 	}
 	if parsed.mode != "" && (parsed.posix || !shoptArgsHaveManagedOption(parsed.args)) {
@@ -145,7 +121,7 @@ func runShopt(ctx context.Context, runner *interp.Runner, opts *shellOptions, ar
 	for _, arg := range parsed.args {
 		enabled, ok := opts.enabled(parsed.posix, arg)
 		if !ok {
-			fmt.Fprintf(hc.Stderr, "shopt: invalid option name %q\n", arg)
+			fmt.Fprintf(hc.Stderr, "shopt: %s: invalid shell option name\n", arg)
 			return interp.ExitStatus(1)
 		}
 		if parsed.quiet {
@@ -181,7 +157,7 @@ func setShoptOptions(ctx context.Context, runner *interp.Runner, opts *shellOpti
 		if err := interp.BashOpts(parsed.mode, arg)(runner); err != nil {
 			switch {
 			case strings.Contains(err.Error(), "invalid option name"):
-				fmt.Fprintf(hc.Stderr, "shopt: invalid option name %q\n", arg)
+				fmt.Fprintf(hc.Stderr, "shopt: %s: invalid shell option name\n", arg)
 			case strings.Contains(err.Error(), "unsupported option"):
 				fmt.Fprintf(hc.Stderr, "shopt: unsupported option %q\n", arg)
 			default:

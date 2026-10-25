@@ -165,37 +165,37 @@ func parseCompleteArgs(args []string) (remove, list bool, command string, spec *
 			list = true
 		case "-F":
 			if i+1 >= len(args) {
-				return false, false, "", nil, fmt.Errorf("complete: -F requires a function name")
+				return false, false, "", nil, completeUsagef("-F: option requires an argument")
 			}
 			i++
 			spec.funcName = args[i]
 		case "-W":
 			if i+1 >= len(args) {
-				return false, false, "", nil, fmt.Errorf("complete: -W requires a word list")
+				return false, false, "", nil, completeUsagef("-W: option requires an argument")
 			}
 			i++
 			spec.words = splitCompletionWordList(args[i])
 		case "-A":
 			if i+1 >= len(args) {
-				return false, false, "", nil, fmt.Errorf("complete: -A requires an action")
+				return false, false, "", nil, completeUsagef("-A: option requires an argument")
 			}
 			i++
 			spec.actions = append(spec.actions, args[i])
 		case "-P":
 			if i+1 >= len(args) {
-				return false, false, "", nil, fmt.Errorf("complete: -P requires a prefix")
+				return false, false, "", nil, completeUsagef("-P: option requires an argument")
 			}
 			i++
 			spec.prefix = args[i]
 		case "-S":
 			if i+1 >= len(args) {
-				return false, false, "", nil, fmt.Errorf("complete: -S requires a suffix")
+				return false, false, "", nil, completeUsagef("-S: option requires an argument")
 			}
 			i++
 			spec.suffix = args[i]
 		case "-o":
 			if i+1 >= len(args) {
-				return false, false, "", nil, fmt.Errorf("complete: -o requires an option")
+				return false, false, "", nil, completeUsagef("-o: option requires an argument")
 			}
 			i++
 			if err := setCompletionOption(spec, args[i], true); err != nil {
@@ -205,7 +205,7 @@ func parseCompleteArgs(args []string) (remove, list bool, command string, spec *
 			return false, false, "", nil, fmt.Errorf("complete: unsupported flag %q", arg)
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return false, false, "", nil, fmt.Errorf("complete: invalid option %q", arg)
+				return false, false, "", nil, completeUsagef("%s: invalid option", arg)
 			}
 			if command != "" {
 				return false, false, "", nil, fmt.Errorf("complete: too many command names")
@@ -291,25 +291,25 @@ func builtinCompgen(deps callDeps, ctx context.Context, args []string, out io.Wr
 		switch arg {
 		case "-W":
 			if i+1 >= len(args) {
-				return fmt.Errorf("compgen: -W requires a word list")
+				return compgenUsagef("-W: option requires an argument")
 			}
 			i++
 			wordList = args[i]
 		case "-A":
 			if i+1 >= len(args) {
-				return fmt.Errorf("compgen: -A requires an action")
+				return compgenUsagef("-A: option requires an argument")
 			}
 			i++
 			action = args[i]
 		case "-P":
 			if i+1 >= len(args) {
-				return fmt.Errorf("compgen: -P requires a prefix")
+				return compgenUsagef("-P: option requires an argument")
 			}
 			i++
 			prefix = args[i]
 		case "-S":
 			if i+1 >= len(args) {
-				return fmt.Errorf("compgen: -S requires a suffix")
+				return compgenUsagef("-S: option requires an argument")
 			}
 			i++
 			suffix = args[i]
@@ -317,7 +317,7 @@ func builtinCompgen(deps callDeps, ctx context.Context, args []string, out io.Wr
 			return fmt.Errorf("compgen: unsupported flag %q", arg)
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return fmt.Errorf("compgen: invalid option %q", arg)
+				return compgenUsagef("%s: invalid option", arg)
 			}
 			if seenWord {
 				return fmt.Errorf("compgen: too many word arguments")
@@ -401,7 +401,7 @@ func builtinCompopt(deps callDeps, args []string, out io.Writer) error {
 		arg := args[i]
 		if arg == "-o" || arg == "+o" {
 			if i+1 >= len(args) {
-				return fmt.Errorf("compopt: %s requires an option name", arg)
+				return builtinUsagef("compopt: %s: option requires an argument\n%s", arg, compoptUsage)
 			}
 			i++
 			if err := setCompletionOption(spec, args[i], arg[0] == '-'); err != nil {
@@ -415,7 +415,7 @@ func builtinCompopt(deps callDeps, args []string, out io.Writer) error {
 			}
 			continue
 		}
-		return fmt.Errorf("compopt: invalid option %q", arg)
+		return builtinUsagef("compopt: %s: invalid option\n%s", arg, compoptUsage)
 	}
 	return nil
 }
@@ -584,4 +584,18 @@ func (c *autoCompleter) actionCandidates(action, prefix string) []string {
 	default:
 		return nil
 	}
+}
+
+const (
+	completeUsage = "complete: usage: complete [-abcdefgjksuv] [-pr] [-DEI] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [name ...]"
+	compgenUsage  = "compgen: usage: compgen [-V varname] [-abcdefgjksuv] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [word]"
+	compoptUsage  = "compopt: usage: compopt [-o|+o option] [-DEI] [name ...]"
+)
+
+func completeUsagef(format string, args ...any) error {
+	return builtinUsagef("complete: "+format+"\n"+completeUsage, args...)
+}
+
+func compgenUsagef(format string, args ...any) error {
+	return builtinUsagef("compgen: "+format+"\n"+compgenUsage, args...)
 }

@@ -297,13 +297,20 @@ func historyTimestamp(line string) (int64, bool) {
 	return t, err == nil
 }
 
-// ReadNew appends the lines that were added to the history file since this
-// shell last read or wrote it, as "history -n" does.
-func (h *history) ReadNew() error {
-	if h == nil || h.cfg.file == "" {
+// ReadNew appends the lines that were added to the history file name, the
+// configured one when empty, since this shell last read or wrote it, as
+// "history -n" does.
+func (h *history) ReadNew(name string) error {
+	if h == nil {
+		return nil
+	}
+	if name == "" {
+		name = h.cfg.file
+	}
+	if name == "" {
 		return fmt.Errorf("history: no history file")
 	}
-	file, err := os.Open(h.cfg.file)
+	file, err := os.Open(name)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil

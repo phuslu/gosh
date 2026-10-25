@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"mvdan.cc/sh/v3/interp"
 )
 
 // builtinHistory implements the history builtin: listing all or the last
@@ -48,12 +50,12 @@ func builtinHistory(h *history, args []string, stdout io.Writer) error {
 					i++
 					deleteSpec = args[i]
 				} else {
-					return fmt.Errorf("history: -d: option requires an argument")
+					return builtinUsagef("history: -d: option requires an argument\n%s", historyUsage)
 				}
 				j = len(arg)
 			case 'a', 'n', 'r', 'w':
 				if fileOp != 0 && fileOp != opt {
-					return fmt.Errorf("history: cannot use more than one of -anrw")
+					return builtinUsagef("history: cannot use more than one of -anrw")
 				}
 				fileOp = opt
 			case 's':
@@ -61,7 +63,7 @@ func builtinHistory(h *history, args []string, stdout io.Writer) error {
 			case 'p':
 				print = true
 			default:
-				return fmt.Errorf("history: -%c: invalid option\n%s", opt, historyUsage)
+				return builtinUsagef("history: -%c: invalid option\n%s", opt, historyUsage)
 			}
 		}
 	}
@@ -107,9 +109,19 @@ func builtinHistory(h *history, args []string, stdout io.Writer) error {
 			}
 			return h.AppendNew()
 		case 'n':
-			return h.ReadNew()
+			return h.ReadNew(file)
 		case 'r':
-			return h.ReadFile(file)
+			if err := h.ReadFile(file); err != nil {
+				return err
+			}
+			if file == "" {
+				file = h.cfg.file
+			}
+			if info, err := os.Stat(file); err == nil && info.Size() == 0 {
+				// Like Bash, reading an empty file fails without a message.
+				return interp.ExitStatus(1)
+			}
+			return nil
 		case 'w':
 			return h.WriteFile(file)
 		}
@@ -120,7 +132,7 @@ func builtinHistory(h *history, args []string, stdout io.Writer) error {
 	if len(args) > 0 {
 		n, err := strconv.Atoi(args[0])
 		if err != nil || n < 0 {
-			return fmt.Errorf("history: %s: numeric argument required", args[0])
+			return builtinUsagef("history: %s: numeric argument required", args[0])
 		}
 		listCount, hasList = n, true
 	}
@@ -138,6 +150,8 @@ func builtinHistory(h *history, args []string, stdout io.Writer) error {
 	}
 	return nil
 }
+
+const fcUsage = "fc: usage: fc [-e ename] [-lnr] [first] [last] or fc -s [pat=rep] [command]"
 
 const historyUsage = "history: usage: history [-c] [-d offset] [n] or history -anrw [filename] or history -ps arg [arg...]"
 
@@ -206,7 +220,7 @@ func builtinFc(h *history, args []string, stdout io.Writer) error {
 			case 'r':
 				reverse = true
 			default:
-				return fmt.Errorf("fc: -%c: invalid option", opt)
+				return builtinUsagef("fc: -%c: invalid option\n%s", opt, fcUsage)
 			}
 		}
 		args = args[1:]
