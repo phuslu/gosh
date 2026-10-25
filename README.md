@@ -59,6 +59,8 @@ enabled
 - Interactive line editing with readline.
 - Command and path completion.
 - Prefix history search for the up/down arrow bindings.
+- Bash history expansion (`!!`, `!$`, `!n`, `!string`, `^old^new`, word
+  designators and modifiers) in interactive shells, `set +H` to turn it off.
 - Bash prompt escape rendering for common `PS1` and `PS2` sequences.
 - `bind` support for common cursor and history-search actions.
 - Bash-compatible history: `HISTFILE` (default `~/.gosh_history`),

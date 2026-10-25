@@ -197,12 +197,17 @@ type shellOptions struct {
 	mu    sync.RWMutex
 	posix map[string]*bool
 	bash  map[string]*bool
+	// histExpand is "set -o histexpand" (set -H), which gosh implements
+	// itself and keeps out of the table mirroring the interpreter's "set"
+	// options. Like Bash, it starts on in an interactive shell.
+	histExpand bool
 }
 
 func newShellOptions(interactive bool) *shellOptions {
 	opts := &shellOptions{
-		posix: make(map[string]*bool, len(shoptPosixOptionNames)),
-		bash:  make(map[string]*bool, len(shoptBashOptionNames)),
+		posix:      make(map[string]*bool, len(shoptPosixOptionNames)),
+		bash:       make(map[string]*bool, len(shoptBashOptionNames)),
+		histExpand: interactive,
 	}
 	for _, desc := range shellOptionTable {
 		value := desc.defaultOn || (interactive && desc.interactiveOn)
@@ -266,6 +271,7 @@ func (o *shellOptions) reset(interactive bool) {
 	o.mu.Lock()
 	o.posix = fresh.posix
 	o.bash = fresh.bash
+	o.histExpand = fresh.histExpand
 	o.mu.Unlock()
 }
 
@@ -288,8 +294,14 @@ func (o *shellOptions) recordSet(args []string) {
 					return
 				}
 				i++
+				if args[i] == "histexpand" {
+					o.setHistExpand(enable)
+				}
 				o.set(true, args[i], enable)
 				break
+			}
+			if flag == 'H' {
+				o.setHistExpand(enable)
 			}
 			if name, ok := posixOptionNameByFlag(byte(flag)); ok {
 				o.set(true, name, enable)
@@ -312,14 +324,21 @@ func posixOptionNameByFlag(flag byte) (string, bool) {
 		return "nounset", true
 	case 'x':
 		return "xtrace", true
+
 	default:
 		return "", false
 	}
 }
 
-// handleSetVerboseOption keeps "set -v"/"set +v" working as accepted no-ops.
-// mvdan.cc/sh/v3 does not implement the Bash verbose option, and v3.14 now
-// computes "$-" itself, so we strip the flag before forwarding to its "set".
+// setFlagsOutsideInterp maps the "set" flags mvdan.cc/sh/v3 does not know to
+// their option names: gosh implements histexpand itself and accepts verbose
+// as a no-op.
+var setFlagsOutsideInterp = map[byte]string{'v': "verbose", 'H': "histexpand"}
+
+// handleSetVerboseOption strips the options in setFlagsOutsideInterp, in
+// either form, before "set" reaches the interpreter, which would reject
+// them; recordSet has already recorded them. v3.14 computes "$-" itself, so
+// they do not show there.
 func handleSetVerboseOption(args []string) ([]string, bool) {
 	if len(args) == 0 || args[0] != "set" {
 		return nil, false
@@ -336,7 +355,7 @@ func handleSetVerboseOption(args []string) ([]string, bool) {
 			forward = append(forward, args[i:]...)
 			return forward, changed
 		}
-		if (arg == "-o" || arg == "+o") && i+1 < len(args) && args[i+1] == "verbose" {
+		if (arg == "-o" || arg == "+o") && i+1 < len(args) && isSetOptionOutsideInterp(args[i+1]) {
 			changed = true
 			i++
 			continue
@@ -347,7 +366,7 @@ func handleSetVerboseOption(args []string) ([]string, bool) {
 		}
 		var rest []byte
 		for idx := 1; idx < len(arg); idx++ {
-			if arg[idx] == 'v' {
+			if _, ok := setFlagsOutsideInterp[arg[idx]]; ok {
 				changed = true
 				continue
 			}
@@ -387,4 +406,29 @@ func setRunnerStringVar(runner *interp.Runner, name, value string) {
 		runner.Vars = make(map[string]expand.Variable)
 	}
 	runner.Vars[name] = vr
+}
+
+func isSetOptionOutsideInterp(name string) bool {
+	for _, option := range setFlagsOutsideInterp {
+		if option == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (o *shellOptions) setHistExpand(on bool) {
+	o.mu.Lock()
+	o.histExpand = on
+	o.mu.Unlock()
+}
+
+// historyExpansion reports whether "set -H" is on.
+func (o *shellOptions) historyExpansion() bool {
+	if o == nil {
+		return false
+	}
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.histExpand
 }

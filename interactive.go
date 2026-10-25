@@ -116,7 +116,7 @@ func (r *reader) Read(p []byte) (int, error) {
 		return n, nil
 	}
 
-	line, err := r.rl.Readline()
+	line, err := r.readLine()
 	if err != nil {
 		if err == readline.ErrInterrupt {
 			// Ctrl-C: feed a bare newline so the parser discards the current
@@ -136,6 +136,33 @@ func (r *reader) Read(p []byte) (int, error) {
 		r.buf = data[n:] // stash the remainder for the next Read call
 	}
 	return n, nil
+}
+
+// readLine reads the next line, applying history expansion when histexpand
+// is on. Like Bash, it shows an expanded line before running it, and a line
+// which fails to expand is reported and dropped. A :p modifier only shows
+// the expanded line and remembers it.
+func (r *reader) readLine() (string, error) {
+	for {
+		line, err := r.rl.Readline()
+		if err != nil || r.history == nil || !r.opts.historyExpansion() {
+			return line, err
+		}
+		expanded, changed, printOnly, expandErr := r.history.Expand(line)
+		if expandErr != nil {
+			fmt.Fprintf(r.rl.Stderr(), "gosh: %v\n", expandErr)
+			continue
+		}
+		if !changed {
+			return line, nil
+		}
+		fmt.Fprintln(r.rl.Stderr(), expanded)
+		if printOnly {
+			r.saveHistoryLine(expanded)
+			return "", nil
+		}
+		return expanded, nil
+	}
 }
 
 func (r *reader) savePendingHistory() {

@@ -17,14 +17,14 @@ import (
 
 // builtinHistory implements the history builtin: listing all or the last
 // n entries, -c, -d offset or start-end, -a, -n, -r and -w with an optional
-// file, and -s. It is a separate function so it can be tested without an
+// file, -p and -s. It is a separate function so it can be tested without an
 // interpreter runner.
 func builtinHistory(h *history, args []string, stdout io.Writer) error {
 	var (
 		clear              bool
 		deleteSpec         string
 		fileOp             byte
-		store              bool
+		store, print       bool
 		listCount, hasList = 0, false
 	)
 	i := 0
@@ -58,6 +58,8 @@ func builtinHistory(h *history, args []string, stdout io.Writer) error {
 				fileOp = opt
 			case 's':
 				store = true
+			case 'p':
+				print = true
 			default:
 				return fmt.Errorf("history: -%c: invalid option\n%s", opt, historyUsage)
 			}
@@ -65,6 +67,20 @@ func builtinHistory(h *history, args []string, stdout io.Writer) error {
 	}
 	args = args[i:]
 
+	if print {
+		// Like Bash, -p prints what it can and fails if anything did not
+		// expand.
+		var failed error
+		for _, arg := range args {
+			out, _, _, err := h.Expand(arg)
+			if err != nil {
+				failed = fmt.Errorf("history: %s: history expansion failed", arg)
+				continue
+			}
+			fmt.Fprintln(stdout, out)
+		}
+		return failed
+	}
 	if store {
 		if len(args) > 0 {
 			h.ReplaceLast(strings.Join(args, " "))

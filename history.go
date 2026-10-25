@@ -60,6 +60,10 @@ type history struct {
 	// fileLines counts the lines of the history file this shell has read
 	// or written, so "history -n" reads only what other shells appended.
 	fileLines int
+	// lastAdded reports that the newest entry is a command line the shell
+	// added, which "history -s" replaces.
+	lastAdded bool
+	expander  historyExpander
 	// unsaved counts the entries added since the history file was last
 	// written, like Bash's history_lines_this_session: "history -a" and
 	// the end of the session append that many of the newest entries.
@@ -342,14 +346,15 @@ func (h *history) AppendNew() error {
 	return nil
 }
 
-// ReplaceLast replaces the newest entry, which is the "history -s" command
-// running, with line, as "history -s" does.
+// ReplaceLast stores line in place of the newest entry when that is the
+// "history -s" command running, as "history -s" does, and adds it otherwise.
 func (h *history) ReplaceLast(line string) {
 	h.mu.Lock()
-	if len(h.entries) > 0 {
+	if h.lastAdded && len(h.entries) > 0 {
 		h.entries = h.entries[:len(h.entries)-1]
 		h.unsaved = max(h.unsaved-1, 0)
 	}
+	h.lastAdded = false
 	if h.appendLocked(historyEntry{line, time.Now().Unix()}) {
 		h.unsaved++
 	}
@@ -381,6 +386,7 @@ func (h *history) Add(line string) bool {
 		h.mu.Unlock()
 		return false
 	}
+	h.lastAdded = true
 	appendNow := h.shouldAppendOnAdd()
 	if !appendNow {
 		h.unsaved++
@@ -520,6 +526,13 @@ func (h *history) Numbered() (first int, entries []string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.base + 1, historyLines(h.entries)
+}
+
+// Expand applies history expansion to line; see historyExpander.
+func (h *history) Expand(line string) (out string, changed, printOnly bool, err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.expander.expand(line, historyLines(h.entries))
 }
 
 // Timed returns the in-memory entries with their times, the number of the

@@ -429,6 +429,7 @@ func (s *Shell) Interactive(ctx context.Context) error {
 			return err
 		}
 		s.opts.set(false, "expand_aliases", true)
+		s.opts.setHistExpand(true)
 	}
 	return s.runInteractive(ctx)
 }
