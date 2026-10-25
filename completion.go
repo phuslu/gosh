@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/phuslu/gosh/internal/readline"
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 )
 
@@ -132,6 +133,9 @@ func (c *autoCompleter) attach(rl *readline.Instance) {
 
 func (c *autoCompleter) Do(line []rune, pos int) ([][]rune, int) {
 	ctx := c.completionContext(line, pos)
+	if additions, ok := c.variableCompletion(line, pos, ctx); ok {
+		return additions, 0
+	}
 	if programmable := c.programmableCompletion(ctx, line, pos); programmable.handled {
 		return c.applyCompletionOptions(programmable.candidates, ctx, completionStyle{
 			noSpace:  programmable.options.nospace,
@@ -210,6 +214,96 @@ func (c *autoCompleter) applyCompletionOptions(options []string, ctx completionC
 	}
 	c.printMatches(options)
 	return nil, 0
+}
+
+// variableCompletion completes a variable reference before the cursor,
+// "$NAME" or "${NAME", with the names of the shell's variables, as Bash
+// does: a single match gets its closing brace and quote, then a slash when
+// the variable names a directory and a space otherwise, and several are
+// listed. It reports whether the cursor is in such a reference.
+func (c *autoCompleter) variableCompletion(line []rune, pos int, ctx completionContext) ([][]rune, bool) {
+	if ctx.quote == '\'' {
+		return nil, false
+	}
+	text := string(line[:min(max(pos, 0), len(line))])
+	name, braced, ok := variableReferenceAt(text)
+	if !ok {
+		return nil, false
+	}
+	var matches []string
+	for _, v := range completionVariables(c.runner, func(expand.Variable) bool { return true }) {
+		if strings.HasPrefix(v, name) {
+			matches = append(matches, v)
+		}
+	}
+	if len(matches) == 0 {
+		return nil, true
+	}
+	common := longestCommonPrefix(matches)
+	addition := common[len(name):]
+	if len(matches) == 1 {
+		if braced {
+			addition += "}"
+		}
+		if ctx.quote == '"' {
+			addition += `"`
+		}
+		value, _ := runnerStringVar(c.runner, matches[0])
+		if info, err := os.Stat(value); err == nil && info.IsDir() && value != "" {
+			addition += "/"
+		} else {
+			addition += " "
+		}
+		return [][]rune{[]rune(addition)}, true
+	}
+	if addition != "" {
+		return [][]rune{[]rune(addition)}, true
+	}
+	display := make([]string, len(matches))
+	for i, m := range matches {
+		if braced {
+			display[i] = "${" + m
+		} else {
+			display[i] = "$" + m
+		}
+	}
+	c.printList(display)
+	return nil, true
+}
+
+// variableReferenceAt finds the variable reference text ends in, "$NAME"
+// or "${NAME" with NAME possibly empty, not escaped with a backslash, and
+// returns the name so far and whether it is braced.
+func variableReferenceAt(text string) (string, bool, bool) {
+	start := len(text)
+	for start > 0 && isNameByte(text[start-1]) {
+		start--
+	}
+	name := text[start:]
+	if name != "" && name[0] >= '0' && name[0] <= '9' {
+		return "", false, false
+	}
+	braced := false
+	if start > 0 && text[start-1] == '{' {
+		braced = true
+		start--
+	}
+	if start == 0 || text[start-1] != '$' {
+		return "", false, false
+	}
+	// An odd number of backslashes before the "$" escapes it.
+	backslashes := 0
+	for k := start - 2; k >= 0 && text[k] == '\\'; k-- {
+		backslashes++
+	}
+	if backslashes%2 == 1 {
+		return "", false, false
+	}
+	return name, braced, true
+}
+
+func isNameByte(c byte) bool {
+	return c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
 
 type completionContext struct {
@@ -491,18 +585,26 @@ func (c *autoCompleter) completionOptionIsDir(ctx completionContext, option stri
 }
 
 func (c *autoCompleter) printMatches(options []string) {
-	if len(options) == 0 || c.stdout == nil {
+	display := make([]string, len(options))
+	for i, option := range options {
+		display[i] = completionDisplayName(option)
+	}
+	c.printList(display)
+}
+
+// printList lists the matches as they are shown, in columns.
+func (c *autoCompleter) printList(display []string) {
+	if len(display) == 0 || c.stdout == nil {
 		return
 	}
+	options := display
 	width := c.screenWidth()
 	if width <= 0 {
 		width = 80
 	}
 	maxLen := 0
-	display := make([]string, len(options))
-	for i, option := range options {
-		display[i] = completionDisplayName(option)
-		if size := utf8.RuneCountInString(display[i]); size > maxLen {
+	for _, entry := range display {
+		if size := utf8.RuneCountInString(entry); size > maxLen {
 			maxLen = size
 		}
 	}

@@ -298,3 +298,39 @@ func TestCompletionEscapedSpaceAndRedirectPrefix(t *testing.T) {
 		}
 	}
 }
+
+func TestVariableCompletion(t *testing.T) {
+	dir := t.TempDir()
+	c := newProgrammableCompleter(t, "MYV1=x; MYV2=y; MYDIR="+dir)
+	var stdout bytes.Buffer
+	c.stdout = &stdout
+	for _, tc := range []struct {
+		line   string
+		want   string
+		listed string
+	}{
+		{line: `echo $MYD`, want: "IR/"},
+		{line: `echo ${MYD`, want: "IR}/"},
+		{line: `echo "$MYD`, want: `IR"/`},
+		{line: `echo $MYV1`, want: " "},
+		{line: `echo a$MYV`, listed: "$MYV1  $MYV2"},
+		{line: `echo \$MYD`},
+		{line: `echo '$MYD`},
+	} {
+		stdout.Reset()
+		got, _ := c.Do([]rune(tc.line), len([]rune(tc.line)))
+		gotText := ""
+		if len(got) == 1 {
+			gotText = string(got[0])
+		}
+		if tc.want != "" && gotText != tc.want {
+			t.Errorf("Do(%q) = %q, want %q", tc.line, got, tc.want)
+		}
+		if tc.listed != "" && !strings.Contains(stdout.String(), tc.listed) {
+			t.Errorf("Do(%q) listed %q, want %q", tc.line, stdout.String(), tc.listed)
+		}
+		if tc.want == "" && tc.listed == "" && strings.Contains(gotText, "IR") {
+			t.Errorf("Do(%q) = %q, want no variable completion", tc.line, got)
+		}
+	}
+}
