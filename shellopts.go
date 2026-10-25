@@ -1,17 +1,21 @@
 package gosh
 
 import (
+	"fmt"
+	"os"
 	"strconv"
 	"sync"
+	"time"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 )
 
 // installShellOptionVariable wraps the interpreter environment with the
-// gosh-specific BASH_VERSION value and a small overlay that lets gosh-owned
-// runtime state (currently COLUMNS) be written without reaching into
-// unexported interp.Runner fields.
+// gosh-specific BASH_VERSION value, Bash's dynamic variables the
+// interpreter lacks, and a small overlay that lets gosh-owned runtime state
+// (such as COLUMNS) be written without reaching into unexported
+// interp.Runner fields.
 func installShellOptionVariable(runner *interp.Runner, version string) {
 	if runner == nil {
 		return
@@ -20,7 +24,7 @@ func installShellOptionVariable(runner *interp.Runner, version string) {
 	if base == nil {
 		base = expand.ListEnviron()
 	}
-	runner.Env = &shellEnviron{base: base, version: version, overlay: make(map[string]expand.Variable)}
+	runner.Env = &shellEnviron{base: base, version: version, start: time.Now(), overlay: make(map[string]expand.Variable)}
 }
 
 type shellEnviron struct {
@@ -28,11 +32,30 @@ type shellEnviron struct {
 	base    expand.Environ
 	overlay map[string]expand.Variable
 	version string
+	start   time.Time // for SECONDS
 }
 
+// Get looks name up. Like Bash's dynamic variables, SECONDS, EPOCHSECONDS,
+// EPOCHREALTIME and BASHPID are computed when read; an assignment in the
+// shell replaces them with a plain value and unset removes them, as the
+// interpreter keeps its own variables in front of these.
 func (e *shellEnviron) Get(name string) expand.Variable {
-	if name == "BASH_VERSION" {
-		return expand.Variable{Set: true, Kind: expand.String, Str: e.version + "(1)-gosh"}
+	str := func(s string) expand.Variable {
+		return expand.Variable{Set: true, Kind: expand.String, Str: s}
+	}
+	switch name {
+	case "BASH_VERSION":
+		return str(e.version + "(1)-gosh")
+	case "SECONDS":
+		return str(strconv.FormatInt(int64(time.Since(e.start)/time.Second), 10))
+	case "EPOCHSECONDS":
+		return str(strconv.FormatInt(time.Now().Unix(), 10))
+	case "EPOCHREALTIME":
+		now := time.Now()
+		return str(fmt.Sprintf("%d.%06d", now.Unix(), now.Nanosecond()/1000))
+	case "BASHPID":
+		// Subshells run inside the gosh process, so they share its PID.
+		return str(strconv.Itoa(os.Getpid()))
 	}
 	e.mu.RLock()
 	if vr, ok := e.overlay[name]; ok {

@@ -1,6 +1,7 @@
 package gosh
 
 import (
+	"bytes"
 	"regexp"
 	"runtime"
 	"testing"
@@ -39,3 +40,27 @@ func TestDifferentialBuiltins(t *testing.T) {
 // bashErrorPrefix matches the "bash: line N: " Bash puts before errors in
 // scripts.
 var bashErrorPrefix = regexp.MustCompile(`(?m)^bash: line [0-9]+: `)
+
+func TestDynamicVariables(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(Config{
+		Args: []string{"gosh", "-c", `
+			[ "$SECONDS" -lt 5 ] && echo seconds
+			[ "$EPOCHSECONDS" -gt 1700000000 ] && echo epoch
+			[[ $EPOCHREALTIME =~ ^[0-9]+\.[0-9]{6}$ ]] && echo realtime
+			[ "$BASHPID" = "$$" ] && echo bashpid
+			SECONDS=500; echo "$SECONDS"
+			unset EPOCHSECONDS; echo "${EPOCHSECONDS-unset}"
+			env | grep -c -e ^SECONDS= -e ^BASHPID= -e ^EPOCH
+		`},
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Env:    testEnv(t),
+	})
+	if err != nil && ExitCode(err) != 1 {
+		t.Fatalf("Run failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got, want := stdout.String(), "seconds\nepoch\nrealtime\nbashpid\n500\nunset\n0\n"; got != want {
+		t.Fatalf("stdout = %q, want %q\nstderr: %s", got, want, stderr.String())
+	}
+}
