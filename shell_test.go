@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/term"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 )
@@ -258,5 +259,14 @@ func TestWgetBuiltinDefersToBackend(t *testing.T) {
 	}
 	if got, _, _, _, _ := backend.snapshot(); len(got) != 1 || got[0][0] != "wget" {
 		t.Fatalf("backend execs = %q, want the wget call", got)
+	}
+}
+
+func TestTerminalSizeFallsBackWithoutTerminal(t *testing.T) {
+	if term.IsTerminal(int(os.Stdout.Fd())) || term.IsTerminal(int(os.Stderr.Fd())) {
+		t.Skip("the test output is a terminal")
+	}
+	if width, height := terminalSize(); width != 80 || height != 24 {
+		t.Fatalf("terminalSize() = %dx%d, want 80x24", width, height)
 	}
 }

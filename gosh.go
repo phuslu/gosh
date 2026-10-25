@@ -505,6 +505,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 		AutoComplete:           completer,
 		Listener:               historySearch.OnChange,
 		Stdin:                  boundStdin,
+		FuncGetSize:            terminalSize,
 	})
 	if err != nil {
 		return err
