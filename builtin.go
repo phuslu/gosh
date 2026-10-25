@@ -108,13 +108,17 @@ func builtinHistory(h *history, args []string, stdout io.Writer) error {
 		}
 		listCount, hasList = n, true
 	}
-	first, entries := h.Numbered()
+	first, entries, timeFormat, timestamps := h.Timed()
 	if hasList && listCount < len(entries) {
 		first += len(entries) - listCount
 		entries = entries[len(entries)-listCount:]
 	}
 	for idx, entry := range entries {
-		fmt.Fprintf(stdout, "%5d  %s\n", first+idx, entry)
+		stamp := ""
+		if timestamps {
+			stamp = strftime(timeFormat, time.Unix(entry.time, 0))
+		}
+		fmt.Fprintf(stdout, "%5d  %s%s\n", first+idx, stamp, entry.line)
 	}
 	return nil
 }
@@ -161,9 +165,11 @@ func deleteHistory(h *history, spec string) error {
 func writeHistoryFileEntries(h *history, name string) error {
 	h.mu.Lock()
 	n := min(h.unsaved, len(h.entries))
-	lines := slices.Clone(h.entries[len(h.entries)-n:])
+	entries := slices.Clone(h.entries[len(h.entries)-n:])
+	timestamps := h.cfg.timestamps
 	h.mu.Unlock()
-	return appendHistoryLines(name, lines...)
+	_, err := appendHistoryLines(name, timestamps, entries...)
+	return err
 }
 
 // builtinFc implements "fc -l [-nr] [first [last]]". first and last are

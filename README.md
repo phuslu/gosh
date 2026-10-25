@@ -62,8 +62,8 @@ enabled
 - Bash prompt escape rendering for common `PS1` and `PS2` sequences.
 - `bind` support for common cursor and history-search actions.
 - Bash-compatible history: `HISTFILE` (default `~/.gosh_history`),
-  `HISTSIZE` (default 500), `HISTFILESIZE`, `HISTCONTROL`, and the
-  `cmdhist`/`lithist`/`histappend` shopt options.
+  `HISTSIZE` (default 500), `HISTFILESIZE`, `HISTCONTROL`, `HISTIGNORE`,
+  `HISTTIMEFORMAT`, and the `cmdhist`/`lithist`/`histappend` shopt options.
 - `shopt -q` compatibility, including `builtin shopt -q` and
   `command shopt -q`.
 - Programmable completion via `complete`, `compgen`, and `compopt`, including

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -893,6 +894,49 @@ func TestDifferentialHistoryBuiltinOptions(t *testing.T) {
 			got, gotFile := run(testGoshBinary, []string{"-i", "--norc"})
 			if got.stdout != want.stdout {
 				t.Fatalf("output mismatch:\nbash: %q\ngosh: %q\ngosh stderr: %q", want.stdout, got.stdout, got.stderr)
+			}
+			if gotFile != wantFile {
+				t.Fatalf("history file mismatch:\nbash: %q\ngosh: %q", wantFile, gotFile)
+			}
+		})
+	}
+}
+
+// TestDifferentialHistoryTimestamps compares HISTTIMEFORMAT and the
+// timestamp lines of the history file with Bash. Times taken from the clock
+// are masked, the ones read from the file are not.
+func TestDifferentialHistoryTimestamps(t *testing.T) {
+	requireBash(t)
+	now := regexp.MustCompile(`\b1[0-9]{9}\b`)
+	for _, tc := range []struct {
+		name, seed string
+		env        []string
+		lines      []string
+	}{
+		{name: "format", seed: "old1\n#100\nold2\n#abc\n", lines: []string{`HISTTIMEFORMAT='[%s] '`, "history", "unset HISTTIMEFORMAT", "history 1"}},
+		{name: "write", lines: []string{"HISTTIMEFORMAT=", "echo a"}},
+		{name: "truncate keeps stamps", seed: "#5\nold1\n#6\nold2\n#7\nold3\n", env: []string{"HISTFILESIZE=2"}, lines: []string{"echo a"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := append(slices.Clone(tc.lines), "exit")
+			run := func(shell string, args []string) (string, string) {
+				file := filepath.Join(t.TempDir(), "history")
+				if tc.seed != "" {
+					if err := os.WriteFile(file, []byte(tc.seed), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				env := slices.DeleteFunc(historyEnv(t, file), func(kv string) bool {
+					return strings.HasPrefix(kv, "HISTFILESIZE=") && len(tc.env) > 0
+				})
+				res := runInteractiveHistory(t, shell, "", args, script, append(env, tc.env...))
+				data, _ := os.ReadFile(file)
+				return now.ReplaceAllString(res.stdout, "NOW"), now.ReplaceAllString(string(data), "NOW")
+			}
+			wantOut, wantFile := run("bash", []string{"--noprofile", "--norc", "-i"})
+			gotOut, gotFile := run(testGoshBinary, []string{"-i", "--norc"})
+			if gotOut != wantOut {
+				t.Fatalf("output mismatch:\nbash: %q\ngosh: %q", wantOut, gotOut)
 			}
 			if gotFile != wantFile {
 				t.Fatalf("history file mismatch:\nbash: %q\ngosh: %q", wantFile, gotFile)

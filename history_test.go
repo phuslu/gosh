@@ -165,7 +165,7 @@ func TestHistoryFileTruncation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := truncateHistoryFile(file, 2); err != nil {
+	if _, err := truncateHistoryFile(file, 2); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(file)
@@ -176,7 +176,7 @@ func TestHistoryFileTruncation(t *testing.T) {
 		t.Fatalf("truncated file = %q, want %q", got, want)
 	}
 
-	if err := truncateHistoryFile(file, 0); err != nil {
+	if _, err := truncateHistoryFile(file, 0); err != nil {
 		t.Fatal(err)
 	}
 	data, err = os.ReadFile(file)
@@ -187,10 +187,10 @@ func TestHistoryFileTruncation(t *testing.T) {
 		t.Fatalf("HISTFILESIZE=0 file = %q, want empty", data)
 	}
 
-	if err := truncateHistoryFile(file, -1); err != nil {
+	if _, err := truncateHistoryFile(file, -1); err != nil {
 		t.Fatal(err)
 	}
-	if err := truncateHistoryFile(filepath.Join(t.TempDir(), "missing"), 2); err != nil {
+	if _, err := truncateHistoryFile(filepath.Join(t.TempDir(), "missing"), 2); err != nil {
 		t.Fatalf("missing file truncation should be a no-op: %v", err)
 	}
 }

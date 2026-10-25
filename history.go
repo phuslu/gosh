@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"mvdan.cc/sh/v3/expand"
@@ -38,6 +39,11 @@ type historyConfig struct {
 	// ignore is HISTIGNORE, a colon-separated list of patterns for lines
 	// not to remember.
 	ignore string
+	// timestamps reports whether HISTTIMEFORMAT is set, in which case the
+	// history file records when each entry was added and "history" shows
+	// it formatted with timeFormat.
+	timestamps bool
+	timeFormat string
 }
 
 type history struct {
@@ -46,7 +52,7 @@ type history struct {
 	resync      func()
 	onError     func(error)
 	mu          sync.Mutex
-	entries     []string
+	entries     []historyEntry
 	// base is the number of entries dropped from the front since the list
 	// was last cleared, so that like Bash's history_base, entry i of
 	// entries keeps the number base+i+1 when older entries are dropped.
@@ -58,6 +64,21 @@ type history struct {
 	// written, like Bash's history_lines_this_session: "history -a" and
 	// the end of the session append that many of the newest entries.
 	unsaved int
+}
+
+// historyEntry is one remembered command line and when it was added, in
+// seconds since the epoch.
+type historyEntry struct {
+	line string
+	time int64
+}
+
+func historyLines(entries []historyEntry) []string {
+	lines := make([]string, len(entries))
+	for i, entry := range entries {
+		lines[i] = entry.line
+	}
+	return lines
 }
 
 type historyControl struct {
@@ -114,6 +135,7 @@ func shellHistoryConfig(runner *interp.Runner) historyConfig {
 	fileSize, _ := runnerStringVar(runner, "HISTFILESIZE")
 	control, _ := runnerStringVar(runner, "HISTCONTROL")
 	ignore, _ := runnerStringVar(runner, "HISTIGNORE")
+	timeFormat, timestamps := runnerStringVar(runner, "HISTTIMEFORMAT")
 	file, _ := runnerStringVar(runner, "HISTFILE")
 	if file == os.DevNull || file == "/dev/null" {
 		file = ""
@@ -124,6 +146,8 @@ func shellHistoryConfig(runner *interp.Runner) historyConfig {
 		control:       parseHistoryControl(control),
 		file:          file,
 		ignore:        ignore,
+		timestamps:    timestamps,
+		timeFormat:    timeFormat,
 	}
 }
 
@@ -226,16 +250,27 @@ func (h *history) Load(r io.Reader) error {
 }
 
 // load appends the entries of a history file after its first skip lines and
-// returns the number of lines it has.
+// returns the number of lines it has. Like Bash, a "#" line with only digits
+// after it gives the time of the entry that follows; entries without one
+// get the current time.
 func (h *history) load(r io.Reader, skip int) (int, error) {
 	br := bufio.NewReader(r)
 	n := 0
+	stamp := int64(-1)
 	for {
 		line, err := br.ReadString('\n')
 		if line != "" {
 			n++
 			if n > skip {
-				h.append(decodeHistoryLine(line))
+				if t, ok := historyTimestamp(line); ok {
+					stamp = t
+				} else {
+					if stamp < 0 {
+						stamp = time.Now().Unix()
+					}
+					h.appendEntry(historyEntry{decodeHistoryLine(line), stamp})
+					stamp = -1
+				}
 			}
 		}
 		if err != nil {
@@ -245,6 +280,17 @@ func (h *history) load(r io.Reader, skip int) (int, error) {
 			return n, err
 		}
 	}
+}
+
+// historyTimestamp parses a history file line holding a timestamp, "#"
+// followed by digits.
+func historyTimestamp(line string) (int64, bool) {
+	line = strings.TrimRight(line, "\r\n")
+	if len(line) < 2 || line[0] != '#' || line[1] < '0' || line[1] > '9' {
+		return 0, false
+	}
+	t, err := strconv.ParseInt(line[1:], 10, 64)
+	return t, err == nil
 }
 
 // ReadNew appends the lines that were added to the history file since this
@@ -285,9 +331,9 @@ func (h *history) AppendNew() error {
 	}
 	h.mu.Lock()
 	n := min(h.unsaved, len(h.entries))
-	lines := slices.Clone(h.entries[len(h.entries)-n:])
+	entries := slices.Clone(h.entries[len(h.entries)-n:])
 	h.mu.Unlock()
-	if err := h.appendFile(lines...); err != nil {
+	if err := h.appendFile(entries...); err != nil {
 		return err
 	}
 	h.mu.Lock()
@@ -304,7 +350,7 @@ func (h *history) ReplaceLast(line string) {
 		h.entries = h.entries[:len(h.entries)-1]
 		h.unsaved = max(h.unsaved-1, 0)
 	}
-	if h.appendLocked(line) {
+	if h.appendLocked(historyEntry{line, time.Now().Unix()}) {
 		h.unsaved++
 	}
 	h.mu.Unlock()
@@ -330,7 +376,8 @@ func (h *history) Add(line string) bool {
 		h.resync()
 		h.mu.Lock()
 	}
-	if !h.appendLocked(line) {
+	entry := historyEntry{line, time.Now().Unix()}
+	if !h.appendLocked(entry) {
 		h.mu.Unlock()
 		return false
 	}
@@ -340,21 +387,29 @@ func (h *history) Add(line string) bool {
 	}
 	h.mu.Unlock()
 	if appendNow {
-		if err := h.appendFile(line); err != nil && h.onError != nil {
+		if err := h.appendFile(entry); err != nil && h.onError != nil {
 			h.onError(err)
 		}
 	}
 	return true
 }
 
+// append stores line as if it had been added now, without HISTCONTROL and
+// without writing the history file.
 func (h *history) append(line string) {
-	line, ok := normalizeHistoryLine(line)
+	h.appendEntry(historyEntry{line, time.Now().Unix()})
+}
+
+// appendEntry stores entry, read from a history file.
+func (h *history) appendEntry(entry historyEntry) {
+	line, ok := normalizeHistoryLine(entry.line)
 	if !ok {
 		return
 	}
+	entry.line = line
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.appendLocked(line)
+	h.appendLocked(entry)
 }
 
 // normalizeHistoryLine strips the trailing newline from line and reports
@@ -370,12 +425,12 @@ func (h *history) controlAllowsLocked(line string) bool {
 	if h.cfg.control.ignoreSpace && strings.HasPrefix(line, " ") {
 		return false
 	}
-	if h.cfg.control.ignoreDups && len(h.entries) > 0 && h.entries[len(h.entries)-1] == line {
-		return false
-	}
 	prev := ""
 	if len(h.entries) > 0 {
-		prev = h.entries[len(h.entries)-1]
+		prev = h.entries[len(h.entries)-1].line
+	}
+	if h.cfg.control.ignoreDups && len(h.entries) > 0 && prev == line {
+		return false
 	}
 	return !historyIgnored(h.cfg.ignore, line, prev)
 }
@@ -431,17 +486,17 @@ func (h *history) eraseDupsLocked(line string) bool {
 		return false
 	}
 	n := len(h.entries)
-	h.entries = slices.DeleteFunc(h.entries, func(entry string) bool { return entry == line })
+	h.entries = slices.DeleteFunc(h.entries, func(entry historyEntry) bool { return entry.line == line })
 	return len(h.entries) != n
 }
 
 // appendLocked stores line, honoring HISTSIZE, and reports whether it was
 // stored. h.mu must be held.
-func (h *history) appendLocked(line string) bool {
+func (h *history) appendLocked(entry historyEntry) bool {
 	if h.cfg.inMemoryLimit == 0 {
 		return false
 	}
-	h.entries = append(h.entries, line)
+	h.entries = append(h.entries, entry)
 	if h.cfg.inMemoryLimit > 0 && len(h.entries) > h.cfg.inMemoryLimit {
 		h.dropLocked(len(h.entries) - h.cfg.inMemoryLimit)
 	}
@@ -457,16 +512,22 @@ func (h *history) dropLocked(n int) {
 func (h *history) Entries() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	out := make([]string, len(h.entries))
-	copy(out, h.entries)
-	return out
+	return historyLines(h.entries)
 }
 
 // Numbered returns the in-memory entries and the number of the first one.
 func (h *history) Numbered() (first int, entries []string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.base + 1, slices.Clone(h.entries)
+	return h.base + 1, historyLines(h.entries)
+}
+
+// Timed returns the in-memory entries with their times, the number of the
+// first one and the HISTTIMEFORMAT to show the times with, if any.
+func (h *history) Timed() (first int, entries []historyEntry, timeFormat string, timestamps bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.base + 1, slices.Clone(h.entries), h.cfg.timeFormat, h.cfg.timestamps
 }
 
 // Next returns the number the next entry will get, as shown by \! in
@@ -517,47 +578,59 @@ func (h *history) Delete(pos int) bool {
 	return true
 }
 
-func (h *history) appendFile(lines ...string) error {
-	if h == nil || h.cfg.file == "" || len(lines) == 0 {
+func (h *history) appendFile(entries ...historyEntry) error {
+	if h == nil || h.cfg.file == "" || len(entries) == 0 {
 		return nil
 	}
-	if err := appendHistoryLines(h.cfg.file, lines...); err != nil {
+	n, err := appendHistoryLines(h.cfg.file, h.cfg.timestamps, entries...)
+	if err != nil {
 		return err
 	}
 	h.mu.Lock()
-	h.fileLines += len(lines)
+	h.fileLines += n
 	h.mu.Unlock()
 	return nil
 }
 
-// appendHistoryLines appends entries to the history file name. They go out
-// in a single write, so the lines of shells sharing the file cannot
-// interleave.
-func appendHistoryLines(name string, entries ...string) error {
+// appendHistoryLines appends entries to the history file name and returns
+// the number of lines written. They go out in a single write, so the lines
+// of shells sharing the file cannot interleave.
+func appendHistoryLines(name string, timestamps bool, entries ...historyEntry) (int, error) {
 	var buf bytes.Buffer
-	if err := writeHistoryLines(&buf, entries...); err != nil {
-		return err
+	n, err := writeHistoryLines(&buf, timestamps, entries...)
+	if err != nil {
+		return 0, err
 	}
 	file, err := os.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if _, err := file.Write(buf.Bytes()); err != nil {
 		file.Close()
-		return err
+		return 0, err
 	}
-	return file.Close()
+	return n, file.Close()
 }
 
 // writeHistoryLines writes entries to w in history-file format, one encoded
-// entry per line. It is shared by the append and rewrite paths.
-func writeHistoryLines(w io.Writer, entries ...string) error {
+// entry per line, each after a "#seconds" line with its time when
+// timestamps is set, and returns the number of lines written. It is shared
+// by the append and rewrite paths.
+func writeHistoryLines(w io.Writer, timestamps bool, entries ...historyEntry) (int, error) {
+	n := 0
 	for _, entry := range entries {
-		if _, err := fmt.Fprintln(w, encodeHistoryLine(entry)); err != nil {
-			return err
+		if timestamps {
+			if _, err := fmt.Fprintf(w, "#%d\n", entry.time); err != nil {
+				return n, err
+			}
+			n++
 		}
+		if _, err := fmt.Fprintln(w, encodeHistoryLine(entry.line)); err != nil {
+			return n, err
+		}
+		n++
 	}
-	return nil
+	return n, nil
 }
 
 func (h *history) shouldAppendOnAdd() bool {
@@ -607,16 +680,22 @@ func (h *history) WriteFile(name string) error {
 	if name == "" {
 		return fmt.Errorf("history: no history file")
 	}
-	entries := h.Entries()
+	h.mu.Lock()
+	entries := slices.Clone(h.entries)
+	timestamps := h.cfg.timestamps
+	h.mu.Unlock()
+	lines := 0
 	err := writeFileAtomic(name, func(w io.Writer) error {
-		return writeHistoryLines(w, entries...)
+		var err error
+		lines, err = writeHistoryLines(w, timestamps, entries...)
+		return err
 	})
 	if err != nil {
 		return err
 	}
 	if name == h.cfg.file {
 		h.mu.Lock()
-		h.fileLines = len(entries)
+		h.fileLines = lines
 		h.unsaved = 0
 		h.mu.Unlock()
 	}
@@ -652,45 +731,61 @@ func (h *history) TruncateFile() error {
 	if h == nil || h.cfg.file == "" || h.cfg.fileLimit < 0 {
 		return nil
 	}
-	if err := truncateHistoryFile(h.cfg.file, h.cfg.fileLimit); err != nil {
+	lines, err := truncateHistoryFile(h.cfg.file, h.cfg.fileLimit)
+	if err != nil {
 		return err
 	}
 	h.mu.Lock()
-	h.fileLines = min(h.fileLines, h.cfg.fileLimit)
+	h.fileLines = min(h.fileLines, lines)
 	h.mu.Unlock()
 	return nil
 }
 
-func truncateHistoryFile(name string, limit int) error {
-	if limit < 0 {
-		return nil
-	}
+// truncateHistoryFile keeps the last limit entries of the history file name
+// and returns the number of lines left. A timestamp line stays with the
+// entry after it.
+func truncateHistoryFile(name string, limit int) (int, error) {
 	data, err := os.ReadFile(name)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil
+			return 0, nil
 		}
-		return err
+		return 0, err
 	}
 	lines := strings.Split(string(data), "\n")
 	if n := len(lines); n > 0 && lines[n-1] == "" {
 		lines = lines[:n-1]
 	}
-	if len(lines) <= limit {
-		return nil
+	if limit < 0 {
+		return len(lines), nil
 	}
-	keep := lines[len(lines)-limit:]
-	if limit == 0 {
-		keep = nil
+	// Walk back over limit entries and their timestamps.
+	start, entries := len(lines), 0
+	for start > 0 && entries < limit {
+		start--
+		if _, ok := historyTimestamp(lines[start]); !ok {
+			entries++
+		}
 	}
+	for start > 0 && entries > 0 {
+		if _, ok := historyTimestamp(lines[start-1]); !ok {
+			break
+		}
+		start--
+	}
+	if start == 0 {
+		return len(lines), nil
+	}
+	keep := lines[start:]
 	out := strings.Join(keep, "\n")
 	if len(keep) > 0 {
 		out += "\n"
 	}
-	return writeFileAtomic(name, func(w io.Writer) error {
+	err = writeFileAtomic(name, func(w io.Writer) error {
 		_, err := io.WriteString(w, out)
 		return err
 	})
+	return len(keep), err
 }
 
 // writeFileAtomic replaces name with the bytes produced by write. The content
