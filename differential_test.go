@@ -852,3 +852,44 @@ func TestDifferentialHistoryVariablesAtRuntime(t *testing.T) {
 		}
 	})
 }
+
+// TestDifferentialHistoryBuiltinOptions compares the history and fc
+// builtins' options with Bash, including the history file they leave.
+func TestDifferentialHistoryBuiltinOptions(t *testing.T) {
+	requireBash(t)
+	for _, tc := range []struct {
+		name  string
+		seed  string
+		lines []string
+	}{
+		{name: "count", lines: []string{"echo a", "echo b", "history 2", "history 0"}},
+		{name: "append", lines: []string{"echo a", "history -a", "echo b", `cat "$HISTFILE"`}},
+		{name: "store", lines: []string{"echo a", "history -s foo bar", "history"}},
+		{name: "delete range", lines: []string{"echo a", "echo b", "history -d 1-2", "history", "history -d -1", "history"}},
+		{name: "read new", seed: "old1\nold2\n", lines: []string{"echo a", `echo extra >> "$HISTFILE"`, "history -n", "history"}},
+		{name: "fc", lines: []string{"echo a", "echo b", "fc -l", "fc -ln 1 2", "fc -lr", "fc -l -2"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := append(slices.Clone(tc.lines), "exit")
+			run := func(shell string, args []string) (differentialShellResult, string) {
+				file := filepath.Join(t.TempDir(), "history")
+				if tc.seed != "" {
+					if err := os.WriteFile(file, []byte(tc.seed), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				res := runInteractiveHistory(t, shell, "", args, script, historyEnv(t, file))
+				data, _ := os.ReadFile(file)
+				return res, string(data)
+			}
+			want, wantFile := run("bash", []string{"--noprofile", "--norc", "-i"})
+			got, gotFile := run(testGoshBinary, []string{"-i", "--norc"})
+			if got.stdout != want.stdout {
+				t.Fatalf("output mismatch:\nbash: %q\ngosh: %q\ngosh stderr: %q", want.stdout, got.stdout, got.stderr)
+			}
+			if gotFile != wantFile && tc.name != "read new" {
+				t.Fatalf("history file mismatch:\nbash: %q\ngosh: %q", wantFile, gotFile)
+			}
+		})
+	}
+}

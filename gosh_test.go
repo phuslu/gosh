@@ -411,7 +411,7 @@ func TestRunHistoryBuiltin(t *testing.T) {
 	if got, want := stdout.String(), "no-entry\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
-	if got, want := stderr.String(), "history: position out of range\n"; got != want {
+	if got, want := stderr.String(), "history: 1: history position out of range\n"; got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
 	}
 }
@@ -427,7 +427,8 @@ func TestBuiltinFc(t *testing.T) {
 		t.Fatalf("fc -l failed: %v", err)
 	}
 	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if len(lines) != 16 || lines[0] != "5\tcmd-4" || lines[15] != "20\tcmd-19" {
+	// The newest entry stands for the fc command itself and is left out.
+	if len(lines) != 16 || lines[0] != "4\t cmd-3" || lines[15] != "19\t cmd-18" {
 		t.Fatalf("fc -l default range = %q", out.String())
 	}
 
@@ -435,7 +436,7 @@ func TestBuiltinFc(t *testing.T) {
 	if err := builtinFc(h, []string{"-l", "3", "5"}, &out); err != nil {
 		t.Fatalf("fc -l 3 5 failed: %v", err)
 	}
-	if got, want := out.String(), "3\tcmd-2\n4\tcmd-3\n5\tcmd-4\n"; got != want {
+	if got, want := out.String(), "3\t cmd-2\n4\t cmd-3\n5\t cmd-4\n"; got != want {
 		t.Fatalf("fc -l 3 5 = %q, want %q", got, want)
 	}
 
@@ -443,7 +444,7 @@ func TestBuiltinFc(t *testing.T) {
 	if err := builtinFc(h, []string{"-l", "-2", "-1"}, &out); err != nil {
 		t.Fatalf("fc -l -2 -1 failed: %v", err)
 	}
-	if got, want := out.String(), "19\tcmd-18\n20\tcmd-19\n"; got != want {
+	if got, want := out.String(), "18\t cmd-17\n19\t cmd-18\n"; got != want {
 		t.Fatalf("fc -l -2 -1 = %q, want %q", got, want)
 	}
 
@@ -453,8 +454,19 @@ func TestBuiltinFc(t *testing.T) {
 	if err := builtinFc(h, []string{"-l", "abc"}, &out); err == nil {
 		t.Fatalf("fc -l with invalid offset should fail")
 	}
-	if err := builtinFc(h, []string{"-l", "10", "5"}, &out); err == nil {
-		t.Fatalf("fc -l with reversed range should fail")
+	out.Reset()
+	if err := builtinFc(h, []string{"-l", "5", "3"}, &out); err != nil {
+		t.Fatalf("fc -l 5 3 failed: %v", err)
+	}
+	if got, want := out.String(), "5\t cmd-4\n4\t cmd-3\n3\t cmd-2\n"; got != want {
+		t.Fatalf("fc -l 5 3 = %q, want %q", got, want)
+	}
+	out.Reset()
+	if err := builtinFc(h, []string{"-lnr", "3", "4"}, &out); err != nil {
+		t.Fatalf("fc -lnr 3 4 failed: %v", err)
+	}
+	if got, want := out.String(), "\t cmd-3\n\t cmd-2\n"; got != want {
+		t.Fatalf("fc -lnr 3 4 = %q, want %q", got, want)
 	}
 
 	var empty bytes.Buffer

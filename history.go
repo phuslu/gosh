@@ -46,6 +46,12 @@ type history struct {
 	// entries keeps the number base+i+1 when older entries are dropped.
 	base      int
 	dirtyFile bool
+	// fileLines counts the lines of the history file this shell has read
+	// or written, so "history -n" reads only what other shells appended.
+	fileLines int
+	// unsaved counts the newest entries not yet written to the history
+	// file, which "history -a" appends.
+	unsaved int
 }
 
 type historyControl struct {
@@ -194,22 +200,103 @@ func (h *history) LoadFile(name string) error {
 		return err
 	}
 	defer file.Close()
-	return h.Load(file)
+	n, err := h.load(file, 0)
+	if name == h.cfg.file {
+		h.mu.Lock()
+		h.fileLines = n
+		h.mu.Unlock()
+	}
+	return err
 }
 
 func (h *history) Load(r io.Reader) error {
+	_, err := h.load(r, 0)
+	return err
+}
+
+// load appends the entries of a history file after its first skip lines and
+// returns the number of lines it has.
+func (h *history) load(r io.Reader, skip int) (int, error) {
 	br := bufio.NewReader(r)
+	n := 0
 	for {
 		line, err := br.ReadString('\n')
 		if line != "" {
-			h.append(decodeHistoryLine(line))
+			n++
+			if n > skip {
+				h.append(decodeHistoryLine(line))
+			}
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil
+				return n, nil
 			}
-			return err
+			return n, err
 		}
+	}
+}
+
+// ReadNew appends the lines that were added to the history file since this
+// shell last read or wrote it, as "history -n" does.
+func (h *history) ReadNew() error {
+	if h == nil || h.cfg.file == "" {
+		return fmt.Errorf("history: no history file")
+	}
+	file, err := os.Open(h.cfg.file)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+	h.mu.Lock()
+	skip := h.fileLines
+	h.mu.Unlock()
+	n, err := h.load(file, skip)
+	h.mu.Lock()
+	h.fileLines = max(n, skip)
+	h.mu.Unlock()
+	if h.resync != nil {
+		h.resync()
+	}
+	return err
+}
+
+// AppendNew appends the entries added since the history file was last
+// written to it, as "history -a" does.
+func (h *history) AppendNew() error {
+	if h == nil || h.cfg.file == "" {
+		return fmt.Errorf("history: no history file")
+	}
+	h.mu.Lock()
+	n := min(h.unsaved, len(h.entries))
+	lines := slices.Clone(h.entries[len(h.entries)-n:])
+	h.mu.Unlock()
+	if err := h.appendFile(lines...); err != nil {
+		return err
+	}
+	h.mu.Lock()
+	h.unsaved = 0
+	h.mu.Unlock()
+	return nil
+}
+
+// ReplaceLast replaces the newest entry, which is the "history -s" command
+// running, with line, as "history -s" does.
+func (h *history) ReplaceLast(line string) {
+	h.mu.Lock()
+	if len(h.entries) > 0 {
+		h.entries = h.entries[:len(h.entries)-1]
+		h.unsaved = max(h.unsaved-1, 0)
+	}
+	if h.appendLocked(line) {
+		h.unsaved++
+		h.dirtyFile = true
+	}
+	h.mu.Unlock()
+	if h.resync != nil {
+		h.resync()
 	}
 }
 
@@ -226,6 +313,7 @@ func (h *history) Add(line string) bool {
 	appendNow := h.shouldAppendOnAdd()
 	if !appendNow {
 		h.dirtyFile = true
+		h.unsaved++
 	}
 	h.mu.Unlock()
 	if appendNow {
@@ -347,19 +435,25 @@ func (h *history) Delete(pos int) bool {
 	return true
 }
 
-func (h *history) appendFile(line string) error {
-	if h == nil || h.cfg.file == "" {
+func (h *history) appendFile(lines ...string) error {
+	if h == nil || h.cfg.file == "" || len(lines) == 0 {
 		return nil
 	}
 	file, err := os.OpenFile(h.cfg.file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
 	if err != nil {
 		return err
 	}
-	if err := writeHistoryLines(file, line); err != nil {
+	if err := writeHistoryLines(file, lines...); err != nil {
 		file.Close()
 		return err
 	}
-	return file.Close()
+	if err := file.Close(); err != nil {
+		return err
+	}
+	h.mu.Lock()
+	h.fileLines += len(lines)
+	h.mu.Unlock()
+	return nil
 }
 
 // writeHistoryLines writes entries to w in history-file format, one encoded
@@ -418,6 +512,8 @@ func (h *history) WriteFile(name string) error {
 	if name == h.cfg.file {
 		h.mu.Lock()
 		h.dirtyFile = false
+		h.fileLines = len(entries)
+		h.unsaved = 0
 		h.mu.Unlock()
 	}
 	return nil
@@ -452,7 +548,13 @@ func (h *history) TruncateFile() error {
 	if h == nil || h.cfg.file == "" || h.cfg.fileLimit < 0 {
 		return nil
 	}
-	return truncateHistoryFile(h.cfg.file, h.cfg.fileLimit)
+	if err := truncateHistoryFile(h.cfg.file, h.cfg.fileLimit); err != nil {
+		return err
+	}
+	h.mu.Lock()
+	h.fileLines = min(h.fileLines, h.cfg.fileLimit)
+	h.mu.Unlock()
+	return nil
 }
 
 func truncateHistoryFile(name string, limit int) error {

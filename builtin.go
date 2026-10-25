@@ -9,108 +9,217 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// builtinHistory implements the history builtin's -c/-d/-w/-r flags and the
-// plain listing. It is a separate function so it can be tested without an
+// builtinHistory implements the history builtin: listing all or the last
+// n entries, -c, -d offset or start-end, -a, -n, -r and -w with an optional
+// file, and -s. It is a separate function so it can be tested without an
 // interpreter runner.
 func builtinHistory(h *history, args []string, stdout io.Writer) error {
 	var (
-		clear, delete, write, read bool
-		deletePos                  int
-		file                       string
+		clear              bool
+		deleteSpec         string
+		fileOp             byte
+		store              bool
+		listCount, hasList = 0, false
 	)
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "-c":
-			clear = true
-		case "-d":
-			delete = true
-			if i+1 >= len(args) {
-				return fmt.Errorf("history: -d requires an offset")
-			}
+	i := 0
+	for ; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
 			i++
-			pos, err := strconv.Atoi(args[i])
-			if err != nil {
-				return fmt.Errorf("history: invalid offset %q", args[i])
+			break
+		}
+		if len(arg) < 2 || arg[0] != '-' {
+			break
+		}
+		for j := 1; j < len(arg); j++ {
+			switch opt := arg[j]; opt {
+			case 'c':
+				clear = true
+			case 'd':
+				if j+1 < len(arg) {
+					deleteSpec = arg[j+1:]
+				} else if i+1 < len(args) {
+					i++
+					deleteSpec = args[i]
+				} else {
+					return fmt.Errorf("history: -d: option requires an argument")
+				}
+				j = len(arg)
+			case 'a', 'n', 'r', 'w':
+				if fileOp != 0 && fileOp != opt {
+					return fmt.Errorf("history: cannot use more than one of -anrw")
+				}
+				fileOp = opt
+			case 's':
+				store = true
+			default:
+				return fmt.Errorf("history: -%c: invalid option\n%s", opt, historyUsage)
 			}
-			deletePos = pos
-		case "-w":
-			write = true
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				i++
-				file = args[i]
-			}
-		case "-r":
-			read = true
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				i++
-				file = args[i]
-			}
-		default:
-			return fmt.Errorf("history: unsupported argument %q", args[i])
 		}
 	}
+	args = args[i:]
 
+	if store {
+		if len(args) > 0 {
+			h.ReplaceLast(strings.Join(args, " "))
+		}
+		return nil
+	}
 	if clear {
 		h.Clear()
 	}
-	if delete {
-		if !h.Delete(deletePos) {
-			return fmt.Errorf("history: position out of range")
-		}
-	}
-	if read {
-		if err := h.ReadFile(file); err != nil {
+	if deleteSpec != "" {
+		if err := deleteHistory(h, deleteSpec); err != nil {
 			return err
 		}
 	}
-	if write {
-		if err := h.WriteFile(file); err != nil {
-			return err
+	if fileOp != 0 {
+		file := ""
+		if len(args) > 0 {
+			file = args[0]
+		}
+		switch fileOp {
+		case 'a':
+			if file != "" && file != h.cfg.file {
+				return writeHistoryFileEntries(h, file)
+			}
+			return h.AppendNew()
+		case 'n':
+			return h.ReadNew()
+		case 'r':
+			return h.ReadFile(file)
+		case 'w':
+			return h.WriteFile(file)
 		}
 	}
-	if !clear && !delete && !read && !write {
-		first, entries := h.Numbered()
-		for idx, entry := range entries {
-			fmt.Fprintf(stdout, "%5d  %s\n", first+idx, entry)
+	if clear || deleteSpec != "" {
+		return nil
+	}
+	if len(args) > 0 {
+		n, err := strconv.Atoi(args[0])
+		if err != nil || n < 0 {
+			return fmt.Errorf("history: %s: numeric argument required", args[0])
 		}
+		listCount, hasList = n, true
+	}
+	first, entries := h.Numbered()
+	if hasList && listCount < len(entries) {
+		first += len(entries) - listCount
+		entries = entries[len(entries)-listCount:]
+	}
+	for idx, entry := range entries {
+		fmt.Fprintf(stdout, "%5d  %s\n", first+idx, entry)
 	}
 	return nil
 }
 
-// builtinFc implements the `fc -l [first [last]]` subset of the fc builtin.
-// Offsets are 1-based history positions; negative offsets count from the
-// end. The default range is the last 16 entries, printed chronologically.
+const historyUsage = "history: usage: history [-c] [-d offset] [n] or history -anrw [filename] or history -ps arg [arg...]"
+
+// deleteHistory deletes the entry at offset, or the entries from start to
+// end inclusive for a start-end range, as "history -d" does.
+func deleteHistory(h *history, spec string) error {
+	start, end, isRange := spec, spec, false
+	if i := strings.IndexByte(spec[1:], '-'); i >= 0 {
+		start, end, isRange = spec[:i+1], spec[i+2:], true
+	}
+	first, err := strconv.Atoi(start)
+	if err != nil {
+		return fmt.Errorf("history: %s: history position out of range", spec)
+	}
+	last := first
+	if isRange {
+		if last, err = strconv.Atoi(end); err != nil {
+			return fmt.Errorf("history: %s: history position out of range", spec)
+		}
+	}
+	base, entries := h.Numbered()
+	toIndex := func(pos int) int {
+		if pos < 0 {
+			return len(entries) + pos + 1
+		}
+		return pos - base + 1
+	}
+	from, to := toIndex(first), toIndex(last)
+	if from < 1 || to > len(entries) || from > to {
+		return fmt.Errorf("history: %s: history position out of range", spec)
+	}
+	// Delete from the end so the earlier numbers stay put.
+	for pos := to; pos >= from; pos-- {
+		h.Delete(pos + base - 1)
+	}
+	return nil
+}
+
+// writeHistoryFileEntries appends the entries not yet in the history file
+// to another file, for "history -a file".
+func writeHistoryFileEntries(h *history, name string) error {
+	h.mu.Lock()
+	n := min(h.unsaved, len(h.entries))
+	lines := slices.Clone(h.entries[len(h.entries)-n:])
+	h.mu.Unlock()
+	file, err := os.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
+	if err != nil {
+		return err
+	}
+	if err := writeHistoryLines(file, lines...); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
+}
+
+// builtinFc implements "fc -l [-nr] [first [last]]". first and last are
+// history numbers, or offsets from the end when negative. The default range
+// is the last 16 entries before the fc command itself.
 func builtinFc(h *history, args []string, stdout io.Writer) error {
 	if h == nil {
 		return fmt.Errorf("fc: no history")
 	}
-	if len(args) == 0 || args[0] != "-l" {
+	var list, noNumbers, reverse bool
+	for len(args) > 0 && len(args[0]) > 1 && args[0][0] == '-' && !isNumber(args[0][1:]) {
+		for _, opt := range args[0][1:] {
+			switch opt {
+			case 'l':
+				list = true
+			case 'n':
+				noNumbers = true
+			case 'r':
+				reverse = true
+			default:
+				return fmt.Errorf("fc: -%c: invalid option", opt)
+			}
+		}
+		args = args[1:]
+	}
+	if !list {
 		return fmt.Errorf("fc: only `fc -l` is supported")
 	}
-	args = args[1:]
 	if len(args) > 2 {
 		return fmt.Errorf("fc: too many arguments")
 	}
 
 	base, entries := h.Numbered()
 	base--
-	n := len(entries)
-	if n == 0 {
+	// The fc command itself is the newest entry.
+	n := len(entries) - 1
+	if n <= 0 {
 		return nil
 	}
-	first, last := n-15, n
-	if first < 1 {
-		first = 1
-	}
+	first, last := max(n-15, 1), n
 	var err error
 	if len(args) >= 1 && args[0] != "" {
 		if first, err = fcOffset(args[0], base, n); err != nil {
 			return err
+		}
+		last = first
+		if len(args) == 1 {
+			last = n
 		}
 	}
 	if len(args) >= 2 {
@@ -118,13 +227,30 @@ func builtinFc(h *history, args []string, stdout io.Writer) error {
 			return err
 		}
 	}
-	if first < 1 || last < 1 || first > last || last > n {
+	if first > last {
+		first, last = last, first
+		reverse = !reverse
+	}
+	if first < 1 || last > len(entries) {
 		return fmt.Errorf("fc: history specification out of range")
 	}
-	for i := first; i <= last; i++ {
-		fmt.Fprintf(stdout, "%d\t%s\n", base+i, entries[i-1])
+	for k := first; k <= last; k++ {
+		i := k
+		if reverse {
+			i = first + last - k
+		}
+		if noNumbers {
+			fmt.Fprintf(stdout, "\t %s\n", entries[i-1])
+		} else {
+			fmt.Fprintf(stdout, "%d\t %s\n", base+i, entries[i-1])
+		}
 	}
 	return nil
+}
+
+func isNumber(s string) bool {
+	_, err := strconv.Atoi(s)
+	return err == nil
 }
 
 // fcOffset turns a history number, or a negative offset from the end, into
