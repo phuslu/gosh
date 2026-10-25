@@ -186,7 +186,7 @@ func TestRunInteractiveStatementsIgnoresOrdinaryExitStatus(t *testing.T) {
 	stmts := parseTestStmts(t, "dummy\n")
 	var stderr bytes.Buffer
 
-	cont, err := runInteractiveStatements(context.Background(), runner, stmts, &stderr, nil)
+	cont, _, err := runInteractiveStatements(context.Background(), runner, stmts, &stderr, nil)
 	if !cont {
 		t.Fatalf("runInteractiveStatements stopped on ordinary exit status")
 	}
@@ -203,7 +203,7 @@ func TestRunInteractiveStatementsReturnsExecExitStatus(t *testing.T) {
 	stmts := parseTestStmts(t, "exec dummy\n")
 	var stderr bytes.Buffer
 
-	cont, err := runInteractiveStatements(context.Background(), runner, stmts, &stderr, nil)
+	cont, _, err := runInteractiveStatements(context.Background(), runner, stmts, &stderr, nil)
 	if cont {
 		t.Fatalf("runInteractiveStatements continued after exec")
 	}
@@ -229,7 +229,7 @@ func TestRunInteractiveStatementsInterrupt(t *testing.T) {
 		interrupts := make(chan os.Signal, 1)
 		timer := time.AfterFunc(100*time.Millisecond, func() { interrupts <- os.Interrupt })
 		start := time.Now()
-		cont, err := runInteractiveStatements(context.Background(), runner, parseTestStmts(t, src), &stderr, interrupts)
+		cont, _, err := runInteractiveStatements(context.Background(), runner, parseTestStmts(t, src), &stderr, interrupts)
 		timer.Stop()
 		if !cont || err != nil {
 			t.Fatalf("%q: cont=%v err=%v, want the session to continue", src, cont, err)
@@ -240,7 +240,7 @@ func TestRunInteractiveStatementsInterrupt(t *testing.T) {
 		if strings.Contains(stdout.String(), "after") {
 			t.Fatalf("%q: rest of the line ran after ^C: %q", src, stdout.String())
 		}
-		cont, err = runInteractiveStatements(context.Background(), runner, parseTestStmts(t, "echo status=$?\n"), &stderr, interrupts)
+		cont, _, err = runInteractiveStatements(context.Background(), runner, parseTestStmts(t, "echo status=$?\n"), &stderr, interrupts)
 		if !cont || err != nil {
 			t.Fatalf("%q: follow-up cont=%v err=%v", src, cont, err)
 		}

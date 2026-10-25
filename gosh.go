@@ -396,6 +396,45 @@ func (s *Shell) syncHistoryConfig() {
 	s.history.configure(cfg)
 }
 
+// runPromptCommand runs PROMPT_COMMAND before a primary prompt as Bash does:
+// in the shell itself, each element in turn when it is an array, and with
+// $? left at status, the status of the last command line. It reports
+// whether the commands made the shell exit.
+func (s *Shell) runPromptCommand(ctx context.Context, status int) (bool, error) {
+	vr, ok := lookupRunnerVar(s.runner, "PROMPT_COMMAND")
+	if !ok || !vr.IsSet() {
+		return false, nil
+	}
+	cmds := []string{vr.String()}
+	if vr.Kind == expand.Indexed {
+		cmds = vr.List
+	}
+	ran := false
+	for _, cmd := range cmds {
+		if strings.TrimSpace(cmd) == "" {
+			continue
+		}
+		prog, err := syntax.NewParser().Parse(strings.NewReader(cmd), "PROMPT_COMMAND")
+		if err != nil {
+			fmt.Fprintln(s.stderr, "gosh:", err)
+			continue
+		}
+		s.expandAliases(prog.Stmts...)
+		ran = true
+		err = s.runStatements(ctx, prog.Stmts)
+		if s.runner.Exited() {
+			return true, err
+		}
+		if err != nil && !IsExitStatus(err) {
+			fmt.Fprintln(s.stderr, err)
+		}
+	}
+	if ran {
+		_ = s.runner.Run(ctx, statusStmt(status))
+	}
+	return false, nil
+}
+
 // expandAliases applies Bash's recursive alias expansion to freshly parsed
 // code when alias expansion is on; see aliasTable.
 func (s *Shell) expandAliases(stmts ...*syntax.Stmt) {
@@ -476,8 +515,10 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 	prompts := s.newPromptEnv()
 	promptFallback := defaultPrompt(s.version)
 	promptSeq := 1
+	if exited, err := s.runPromptCommand(ctx, 0); exited {
+		return err
+	}
 	currentPrompt := prompts.render(ctx, "PS1", promptFallback, promptSeq)
-	promptSeq++
 
 	installHistoryDefaults(s.runner)
 	s.history.cfg = shellHistoryConfig(s.runner)
@@ -564,14 +605,18 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 		promptPrinter.Print(rl.Stdout(), nextPrefix)
 		nextPrefix = ""
 	}
-	resetPrompt := func() {
+	// resetPrompt shows the primary prompt again. Like Bash's \#, the
+	// command number advances only when a command ran.
+	resetPrompt := func(ran bool) {
 		if s.cfg.IsTerminal && s.cfg.OnPromptReset != nil {
 			// Windows consoles may lose VT mode after programs exit.
 			s.cfg.OnPromptReset(ctx)
 		}
 		updateCheckwinsizeColumns(s.opts, s.runner, readlineColumns)
+		if ran {
+			promptSeq++
+		}
 		setPrompt(prompts.render(ctx, "PS1", defaultPrompt(s.version), promptSeq))
-		promptSeq++
 		flushPrefix()
 	}
 
@@ -612,6 +657,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 	rdr := &reader{rl: rl, history: s.history, opts: s.opts}
 
 	var exitErr error
+	lastStatus := 0
 	err = runInteractiveParser(s.parser, rdr, func(stmts []*syntax.Stmt) bool {
 		// parser.Incomplete() returns true when the parser has consumed a
 		// partial statement and is waiting for more input (e.g. open quotes,
@@ -625,21 +671,40 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 
 		rdr.savePendingHistory()
 		s.expandAliases(stmts...)
-		cont, err := runInteractiveStatements(ctx, s.runner, stmts, rl.Stderr(), interrupts)
+		if len(stmts) > 0 {
+			// Like Bash, PS0 shows after a command is read, before it runs.
+			ps0 := prompts.render(ctx, "PS0", "", promptSeq)
+			fmt.Fprint(rl.Stderr(), ps0.prefix+ps0.prompt)
+		}
+		cont, status, err := runInteractiveStatements(ctx, s.runner, stmts, rl.Stderr(), interrupts)
 		if !cont {
 			exitErr = err
 			return false
 		}
+		if len(stmts) > 0 {
+			lastStatus = status
+		}
 		s.syncHistoryConfig()
+		if exited, err := s.runPromptCommand(ctx, lastStatus); exited {
+			exitErr = err
+			return false
+		}
 
 		// Restore the main prompt, updating it in case the effective UID
 		// changed (e.g. via su).
-		resetPrompt()
+		resetPrompt(len(stmts) > 0)
 		return true
 	}, func(err error) bool {
 		rdr.savePendingHistory()
 		fmt.Fprintln(rl.Stderr(), err.Error())
-		resetPrompt()
+		// Like Bash, a syntax error sets $? to 2.
+		lastStatus = 2
+		_ = s.runner.Run(ctx, statusStmt(lastStatus))
+		if exited, err := s.runPromptCommand(ctx, lastStatus); exited {
+			exitErr = err
+			return false
+		}
+		resetPrompt(true)
 		return true
 	})
 	if err == nil && exitErr == nil && ctx.Err() == nil {

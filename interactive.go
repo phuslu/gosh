@@ -36,13 +36,15 @@ func runInteractiveParser(parser *syntax.Parser, r io.Reader, run func([]*syntax
 	}
 }
 
-// runInteractiveStatements runs one line of interactive input. A signal on
+// runInteractiveStatements runs one line of interactive input and returns
+// whether the session goes on and the line's exit status. A signal on
 // interrupts cancels the rest of the line: like Bash, ^C abandons the
 // running command and anything after it, sets $? to 130 and returns to the
 // prompt instead of ending the session.
-func runInteractiveStatements(ctx context.Context, runner *interp.Runner, stmts []*syntax.Stmt, stderr io.Writer, interrupts <-chan os.Signal) (bool, error) {
+func runInteractiveStatements(ctx context.Context, runner *interp.Runner, stmts []*syntax.Stmt, stderr io.Writer, interrupts <-chan os.Signal) (bool, int, error) {
 	lineCtx, interrupted, stop := watchInterrupts(ctx, interrupts)
 	defer stop()
+	status := 0
 	for _, stmt := range stmts {
 		err := runner.Run(lineCtx, stmt)
 		if interrupted() && ctx.Err() == nil {
@@ -50,20 +52,23 @@ func runInteractiveStatements(ctx context.Context, runner *interp.Runner, stmts 
 			// Run clears that, so recording the status is all that is left.
 			fmt.Fprintln(stderr)
 			_ = runner.Run(ctx, statusStmt(130))
-			return true, nil
+			return true, 130, nil
 		}
 		if runner.Exited() {
-			return false, err
+			return false, ExitCode(err), err
 		}
+		status = 0
 		if err != nil {
-			var status interp.ExitStatus
-			if errors.As(err, &status) {
+			var exit interp.ExitStatus
+			if errors.As(err, &exit) {
+				status = int(exit)
 				continue
 			}
+			status = 1
 			fmt.Fprintln(stderr, err.Error())
 		}
 	}
-	return true, nil
+	return true, status, nil
 }
 
 // watchInterrupts derives a context which is cancelled by the next signal on
