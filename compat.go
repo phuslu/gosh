@@ -293,11 +293,35 @@ func (d callDeps) rewriteComplete(ctx context.Context, argv []string) ([]string,
 	return sentinelArgs(completeCommand, argv[1:]), true
 }
 
+// rewriteCompgen runs compgen as a sentinel, except "compgen -V name",
+// which generates the matches here and assigns them to the array name
+// through eval, as "printf -v" does.
 func (d callDeps) rewriteCompgen(ctx context.Context, argv []string) ([]string, bool) {
 	if d.completion == nil {
 		return nil, false
 	}
-	return sentinelArgs(compgenCommand, argv[1:]), true
+	parsed, err := parseCompleteArgs("compgen", argv[1:])
+	if err != nil || parsed.varName == "" {
+		return sentinelArgs(compgenCommand, argv[1:]), true
+	}
+	hc := interp.HandlerCtx(ctx)
+	if !printfVarName.MatchString(parsed.varName) || strings.Contains(parsed.varName, "[") {
+		fmt.Fprintf(hc.Stderr, "compgen: `%s': not a valid identifier\n", parsed.varName)
+		return []string{"false"}, true
+	}
+	var matches []string
+	if parsed.specGiven {
+		matches = compgenMatches(d, ctx, parsed)
+	}
+	quoted := make([]string, len(matches))
+	for i, match := range matches {
+		quoted[i] = shellSingleQuote(match)
+	}
+	script := parsed.varName + "=(" + strings.Join(quoted, " ") + ")"
+	if parsed.specGiven && len(matches) == 0 {
+		script += "\nfalse"
+	}
+	return []string{"eval", script}, true
 }
 
 func (d callDeps) rewriteCompopt(ctx context.Context, argv []string) ([]string, bool) {
@@ -394,7 +418,7 @@ var sentinelBuiltins = map[string]func(ctx context.Context, d callDeps, args []s
 		return builtinStatus(ctx, d.bindings.handleBind(args, interp.HandlerCtx(ctx).Stdout))
 	},
 	completeCommand: func(ctx context.Context, d callDeps, args []string) error {
-		return builtinStatus(ctx, builtinComplete(d, args, interp.HandlerCtx(ctx).Stdout))
+		return builtinStatus(ctx, builtinComplete(d, args, interp.HandlerCtx(ctx).Stdout, interp.HandlerCtx(ctx).Stderr))
 	},
 	compgenCommand: func(ctx context.Context, d callDeps, args []string) error {
 		return builtinStatus(ctx, builtinCompgen(d, ctx, args, interp.HandlerCtx(ctx).Stdout))

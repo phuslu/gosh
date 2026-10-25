@@ -597,6 +597,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 		runner:        s.runner,
 		opts:          s.opts,
 		completion:    s.completion,
+		aliases:       s.aliases,
 		stdin:         prompts.stdin,
 		stdout:        conWriter,
 		stderr:        conWriter,

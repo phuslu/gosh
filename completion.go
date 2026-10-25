@@ -22,6 +22,7 @@ type autoCompleter struct {
 	runner        *interp.Runner
 	opts          *shellOptions
 	completion    *completionRegistry
+	aliases       *aliasTable
 	stdin         io.Reader
 	stdout        io.Writer
 	stderr        io.Writer
@@ -74,7 +75,6 @@ var defaultCommandNames = []string{
 	"local",
 	"logout",
 	"mapfile",
-	"newgrp",
 	"popd",
 	"printf",
 	"pushd",
@@ -133,7 +133,11 @@ func (c *autoCompleter) attach(rl *readline.Instance) {
 func (c *autoCompleter) Do(line []rune, pos int) ([][]rune, int) {
 	ctx := c.completionContext(line, pos)
 	if programmable := c.programmableCompletion(ctx, line, pos); programmable.handled {
-		return c.applyCompletionOptions(programmable.candidates, ctx, programmable.noSpace)
+		return c.applyCompletionOptions(programmable.candidates, ctx, completionStyle{
+			noSpace:  programmable.options.nospace,
+			noQuote:  programmable.options.noquote,
+			markDirs: programmable.files,
+		})
 	}
 	var options []string
 	if !ctx.isCommand && shoptEnabled(c.opts, "hostcomplete") {
@@ -148,12 +152,21 @@ func (c *autoCompleter) Do(line []rune, pos int) ([][]rune, int) {
 	if len(options) == 0 {
 		return nil, 0
 	}
-	return c.applyCompletionOptions(options, ctx, false)
+	return c.applyCompletionOptions(options, ctx, completionStyle{markDirs: true})
+}
+
+// completionStyle is how matches go on the line: noSpace leaves out the
+// space after a single match, noQuote its quoting, and markDirs appends a
+// slash to a match naming a directory.
+type completionStyle struct {
+	noSpace  bool
+	noQuote  bool
+	markDirs bool
 }
 
 // applyCompletionOptions turns a candidate list into the readline addition
-// and printed matches, honoring programmable completion's nospace option.
-func (c *autoCompleter) applyCompletionOptions(options []string, ctx completionContext, noSpace bool) ([][]rune, int) {
+// and printed matches, in the given style.
+func (c *autoCompleter) applyCompletionOptions(options []string, ctx completionContext, style completionStyle) ([][]rune, int) {
 	if len(options) == 0 {
 		return nil, 0
 	}
@@ -171,13 +184,17 @@ func (c *autoCompleter) applyCompletionOptions(options []string, ctx completionC
 	}
 	addition := []rune{}
 	if len(commonRunes) > prefixLen {
-		addition = append(addition, []rune(escapeCompletionForContext(string(commonRunes[prefixLen:]), ctx.quote))...)
+		tail := string(commonRunes[prefixLen:])
+		if !style.noQuote {
+			tail = escapeCompletionForContext(tail, ctx.quote)
+		}
+		addition = append(addition, []rune(tail)...)
 	}
 	if len(options) == 1 {
 		hasTrailingSep := hasTrailingPathSeparator(options[0])
-		if noSpace && !hasTrailingSep {
+		if style.noSpace && !hasTrailingSep {
 			// The completion function asked for no trailing separator.
-		} else if c.completionOptionIsDir(ctx, options[0]) {
+		} else if style.markDirs && c.completionOptionIsDir(ctx, options[0]) {
 			if !hasTrailingSep {
 				addition = append(addition, rune(os.PathSeparator))
 			}

@@ -81,7 +81,8 @@ func TestProgrammableCompletionFunctionVariables(t *testing.T) {
 	if !result.handled {
 		t.Fatal("programmable completion was not handled")
 	}
-	if want := []string{"arg", "1"}; !reflect.DeepEqual(result.candidates, want) {
+	// Like readline's, the matches are sorted.
+	if want := []string{"1", "arg"}; !reflect.DeepEqual(result.candidates, want) {
 		t.Fatalf("candidates = %#v, want %#v", result.candidates, want)
 	}
 }
@@ -102,8 +103,11 @@ func TestProgrammableCompletionFunctionArguments(t *testing.T) {
 	} {
 		ctx := parseCompletionContext([]rune(tc.line))
 		result := c.programmableCompletion(ctx, []rune(tc.line), len(tc.line))
-		// Empty replies are dropped, like the empty COMPREPLY entries.
+		// Empty replies are dropped, like the empty COMPREPLY entries, and
+		// the rest sorted without duplicates, as readline shows them.
 		want := slices.DeleteFunc(slices.Clone(tc.want), func(s string) bool { return s == "" })
+		slices.Sort(want)
+		want = slices.Compact(want)
 		if !reflect.DeepEqual(result.candidates, want) {
 			t.Fatalf("%q: candidates = %#v, want %#v\nstderr: %s", tc.line, result.candidates, want, c.stderr)
 		}
@@ -112,7 +116,7 @@ func TestProgrammableCompletionFunctionArguments(t *testing.T) {
 
 func TestProgrammableCompletionWordList(t *testing.T) {
 	c := newProgrammableCompleter(t, "")
-	c.completion.set("greet", &completionSpec{words: []string{"help", "other"}})
+	c.completion.set("greet", &completionSpec{wordList: "help other"})
 
 	ctx := parseCompletionContext([]rune("greet he"))
 	result := c.programmableCompletion(ctx, []rune("greet he"), 8)
@@ -135,7 +139,7 @@ func TestProgrammableCompletionCompopt(t *testing.T) {
 	if !result.handled {
 		t.Fatal("programmable completion was not handled")
 	}
-	if !result.noSpace {
+	if !result.options.nospace {
 		t.Fatalf("compopt -o nospace did not reach the completion invocation\nstderr: %s", c.stderr)
 	}
 	if c.completion.spec("cmd").options.nospace {
@@ -185,10 +189,10 @@ func TestParseCompleteArgsErrors(t *testing.T) {
 	for _, args := range [][]string{
 		{"-F"},
 		{"-o", "unknown", "cmd"},
-		{"-C", "echo", "cmd"},
-		{"one", "two"},
+		{"-A", "unknown", "cmd"},
+		{"-z", "cmd"},
 	} {
-		if _, _, _, _, err := parseCompleteArgs(args); err == nil {
+		if _, err := parseCompleteArgs("complete", args); err == nil {
 			t.Fatalf("parseCompleteArgs(%q) = nil error, want error", args)
 		}
 	}
@@ -258,7 +262,7 @@ func TestApplyCompletionOptionsUnrelatedCandidates(t *testing.T) {
 				stderr: io.Discard,
 			}
 			ctx := completionContext{prefix: test.prefix, isCommand: true, inWord: true}
-			got, gotLen := c.applyCompletionOptions(test.options, ctx, false)
+			got, gotLen := c.applyCompletionOptions(test.options, ctx, completionStyle{markDirs: true})
 			if !reflect.DeepEqual(got, test.want) || gotLen != test.wantLen {
 				t.Fatalf("applyCompletionOptions(%q, prefix %q) = %q, %d, want %q, %d",
 					test.options, test.prefix, got, gotLen, test.want, test.wantLen)

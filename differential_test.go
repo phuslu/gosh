@@ -557,123 +557,24 @@ func TestDifferentialCompletionBuiltins(t *testing.T) {
 		{"complete print unknown command", `complete -p nosuch`},
 		{"complete removes spec", `complete -W one greet; complete -r greet; complete -p greet`},
 		{"compopt outside completion", `compopt -o nospace`},
+		{"compgen double dash separator", `compgen -W "aa ab bb" -- a`},
+		{"compgen no match exit status", `compgen -W "aa ab bb" zz; echo "rc=$?"`},
+		{"compgen action no match exit status", `compgen -A function; echo "rc=$?"`},
+		{"complete without arguments", `complete -W one greet; complete`},
+		{"compgen action variable sees shell variables", `myvar=1; export myvar2=2; compgen -A variable myvar`},
+		{"compgen shorthand action flags", `compgen -b ec; compgen -v PAT; compgen -k fu; compgen -A shopt ext`},
+		{"compgen extra word arguments", `compgen -W "aa ab" a b`},
+		{"complete -r for unknown command", `complete -r nosuch; echo "rc=$?"`},
+		{"complete -p option ordering", "complete -o nospace -o filenames -W one greet; complete -p greet\ncomplete -A function -W one other; complete -p other"},
+		{"compgen action builtin list", `compgen -A builtin`},
+		{"complete several names and specials", `complete -F f -o default a b; complete -D -W d; complete -E -W e; complete -I -c; complete -p a b -D -E -I`},
+		{"compgen word list expansion", `x=xy; compgen -W '$x "a b" $(echo cmd)'`},
+		{"compgen filter", `compgen -W "a-b a+c abc" -X "a+*"; compgen -W "a-b a+c abc" -X '!*-*'; compgen -W "ab ac" -X '&c' a`},
+		{"compgen -V", `compgen -V arr -W "p q r" q; echo "${#arr[@]} ${arr[*]}"; compgen -V none -W p z; echo "rc=$? ${#none[@]}"`},
+		{"compopt on specifications", `complete -F f foo; compopt -o nospace foo; complete -p foo; compopt foo`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assertSameScript(t, tc.script, env, dir)
-		})
-	}
-}
-
-// TestDifferentialCompletionKnownDivergences records where gosh's completion
-// builtins still differ from bash. Every subtest is skipped on purpose: the
-// comment states the bash behavior gosh should eventually grow, and dropping
-// the t.Skip line turns the case into a live differential test.
-func TestDifferentialCompletionKnownDivergences(t *testing.T) {
-	requireBash(t)
-	dir := t.TempDir()
-	env := testEnv(t)
-
-	cases := []struct {
-		name   string
-		reason string
-		script string
-	}{
-		{
-			name: "compgen double dash separator",
-			// bash: `compgen -W "aa ab bb" -- a` prints "aa\nab"; the `--`
-			// ends option parsing so the word can start with a dash.
-			// gosh: rejects it with `compgen: invalid option "--"` (exit 1).
-			reason: "gosh does not accept the -- option terminator",
-			script: `compgen -W "aa ab bb" -- a`,
-		},
-		{
-			name: "compgen no match exit status",
-			// bash: compgen exits 1 when nothing matched, which is what
-			// completion scripts test with `if compgen ...; then`.
-			// gosh: always exits 0 when no error occurred.
-			reason: "gosh returns 0 instead of 1 when no candidate matches",
-			script: `compgen -W "aa ab bb" zz; echo "rc=$?"`,
-		},
-		{
-			name: "compgen action no match exit status",
-			// bash: exits 1 for an action that produced nothing.
-			// gosh: exits 0.
-			reason: "gosh returns 0 instead of 1 for an empty action result",
-			script: `compgen -A function; echo "rc=$?"`,
-		},
-		{
-			name: "complete without arguments",
-			// bash: prints every registered specification and exits 0.
-			// gosh: fails with `complete: missing command name` (exit 1).
-			reason: "gosh requires a command name instead of listing all specs",
-			script: `complete -W one greet; complete`,
-		},
-		{
-			name: "compgen action variable sees shell variables",
-			// bash: lists shell variables, including ones assigned by the
-			// script, so `myvar=1; compgen -A variable myvar` prints myvar.
-			// gosh: only walks the inherited environment, so variables
-			// created (even exported) during the run are invisible.
-			reason: "gosh only completes variables from the initial environment",
-			script: `myvar=1; export myvar2=2; compgen -A variable myvar`,
-		},
-		{
-			name: "compgen shorthand action flags",
-			// bash: -b/-v/-c/-f/-d are shorthands for -A builtin/variable/
-			// command/file/directory, e.g. `compgen -b ec` prints echo.
-			// gosh: rejects them as invalid options.
-			reason: "gosh only implements the -A form of the action flags",
-			script: `compgen -b ec; compgen -v PAT`,
-		},
-		{
-			name: "compgen extra word arguments",
-			// bash: ignores everything after the first word, so
-			// `compgen -W "aa ab" a b` still completes "a".
-			// gosh: fails with `compgen: too many word arguments`.
-			reason: "gosh rejects extra word arguments instead of ignoring them",
-			script: `compgen -W "aa ab" a b`,
-		},
-		{
-			name: "invalid option exit status",
-			// bash: an unknown option is a usage error, printed with the
-			// builtin's usage line and exiting 2.
-			// gosh: prints its own message and exits 1.
-			reason: "gosh exits 1 rather than 2 for a usage error",
-			script: `compgen -Z a; echo "rc=$?"; complete -Z greet; echo "rc=$?"`,
-		},
-		{
-			name: "complete -r for unknown command",
-			// bash: removing a specification that does not exist is silent
-			// and exits 0.
-			// gosh: fails with `complete: no completion specification`.
-			reason: "gosh fails instead of ignoring a missing specification",
-			script: `complete -r nosuch; echo "rc=$?"`,
-		},
-		{
-			name: "complete -p option ordering",
-			// bash: prints -o options in its own canonical order and puts
-			// -A before -W, e.g.
-			//   complete -o filenames -o nospace -W 'one' greet
-			//   complete -A function -W 'one' greet
-			// gosh: prints them in the order its own struct declares.
-			reason: "gosh prints complete -p fields in a different order",
-			script: `complete -o nospace -o filenames -W one greet; complete -p greet
-complete -A function -W one other; complete -p other`,
-		},
-		{
-			name: "compgen action builtin list",
-			// bash: the builtin list is sorted in C order (".", ":", "["
-			// come first) and contains only real bash builtins.
-			// gosh: emits defaultCommandNames unsorted, with ":", "." and
-			// "[" last, and includes non-bash entries such as newgrp.
-			reason: "gosh's builtin list differs in order and membership",
-			script: `compgen -A builtin`,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Skipf("known divergence: %s", tc.reason)
 			assertSameScript(t, tc.script, env, dir)
 		})
 	}
