@@ -163,15 +163,7 @@ func writeHistoryFileEntries(h *history, name string) error {
 	n := min(h.unsaved, len(h.entries))
 	lines := slices.Clone(h.entries[len(h.entries)-n:])
 	h.mu.Unlock()
-	file, err := os.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
-	if err != nil {
-		return err
-	}
-	if err := writeHistoryLines(file, lines...); err != nil {
-		file.Close()
-		return err
-	}
-	return file.Close()
+	return appendHistoryLines(name, lines...)
 }
 
 // builtinFc implements "fc -l [-nr] [first [last]]". first and last are

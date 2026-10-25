@@ -868,6 +868,10 @@ func TestDifferentialHistoryBuiltinOptions(t *testing.T) {
 		{name: "delete range", lines: []string{"echo a", "echo b", "history -d 1-2", "history", "history -d -1", "history"}},
 		{name: "read new", seed: "old1\nold2\n", lines: []string{"echo a", `echo extra >> "$HISTFILE"`, "history -n", "history"}},
 		{name: "fc", lines: []string{"echo a", "echo b", "fc -l", "fc -ln 1 2", "fc -lr", "fc -l -2"}},
+		{name: "other shell appends", seed: "old1\nold2\n", lines: []string{"echo a", `echo X >> "$HISTFILE"`}},
+		{name: "delete loaded entry", seed: "old1\nold2\n", lines: []string{"echo a", "history -d 1"}},
+		{name: "clear", seed: "old1\n", lines: []string{"echo a", "history -c", "echo b"}},
+		{name: "stifled", seed: "old1\nold2\n", lines: []string{"echo a", "echo b", "HISTSIZE=1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			script := append(slices.Clone(tc.lines), "exit")
@@ -887,7 +891,7 @@ func TestDifferentialHistoryBuiltinOptions(t *testing.T) {
 			if got.stdout != want.stdout {
 				t.Fatalf("output mismatch:\nbash: %q\ngosh: %q\ngosh stderr: %q", want.stdout, got.stdout, got.stderr)
 			}
-			if gotFile != wantFile && tc.name != "read new" {
+			if gotFile != wantFile {
 				t.Fatalf("history file mismatch:\nbash: %q\ngosh: %q", wantFile, gotFile)
 			}
 		})

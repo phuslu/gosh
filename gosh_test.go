@@ -339,10 +339,7 @@ func TestHistoryHistappendRewrite(t *testing.T) {
 	if got, want := string(data), "echo old\n"; got != want {
 		t.Fatalf("history file before rewrite = %q, want %q", got, want)
 	}
-	if !history.fileDirty() {
-		t.Fatalf("history file was not marked dirty")
-	}
-	if err := history.RewriteFile(); err != nil {
+	if err := history.SaveOnExit(); err != nil {
 		t.Fatal(err)
 	}
 	data, err = os.ReadFile(file)
@@ -350,7 +347,7 @@ func TestHistoryHistappendRewrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got, want := string(data), "echo old\necho new\n"; got != want {
-		t.Fatalf("history file after rewrite = %q, want %q", got, want)
+		t.Fatalf("history file after exit = %q, want %q", got, want)
 	}
 }
 

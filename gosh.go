@@ -646,10 +646,8 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 		// trap and exits with the last command's status.
 		exitErr = s.runner.Run(ctx, eofExitStmt)
 	}
-	if s.history.fileDirty() {
-		if rewriteErr := s.history.RewriteFile(); rewriteErr != nil {
-			fmt.Fprintln(rl.Stderr(), "failed to rewrite history:", rewriteErr)
-		}
+	if saveErr := s.history.SaveOnExit(); saveErr != nil {
+		fmt.Fprintln(rl.Stderr(), "failed to save history:", saveErr)
 	}
 	if truncateErr := s.history.TruncateFile(); truncateErr != nil {
 		fmt.Fprintln(rl.Stderr(), "failed to truncate history:", truncateErr)

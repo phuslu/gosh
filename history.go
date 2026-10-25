@@ -2,6 +2,7 @@ package gosh
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -44,13 +45,13 @@ type history struct {
 	// base is the number of entries dropped from the front since the list
 	// was last cleared, so that like Bash's history_base, entry i of
 	// entries keeps the number base+i+1 when older entries are dropped.
-	base      int
-	dirtyFile bool
+	base int
 	// fileLines counts the lines of the history file this shell has read
 	// or written, so "history -n" reads only what other shells appended.
 	fileLines int
-	// unsaved counts the newest entries not yet written to the history
-	// file, which "history -a" appends.
+	// unsaved counts the entries added since the history file was last
+	// written, like Bash's history_lines_this_session: "history -a" and
+	// the end of the session append that many of the newest entries.
 	unsaved int
 }
 
@@ -256,6 +257,9 @@ func (h *history) ReadNew() error {
 	n, err := h.load(file, skip)
 	h.mu.Lock()
 	h.fileLines = max(n, skip)
+	// Like Bash, the lines read count as this session's and are appended
+	// again at its end.
+	h.unsaved += max(n-skip, 0)
 	h.mu.Unlock()
 	if h.resync != nil {
 		h.resync()
@@ -292,7 +296,6 @@ func (h *history) ReplaceLast(line string) {
 	}
 	if h.appendLocked(line) {
 		h.unsaved++
-		h.dirtyFile = true
 	}
 	h.mu.Unlock()
 	if h.resync != nil {
@@ -312,7 +315,6 @@ func (h *history) Add(line string) bool {
 	}
 	appendNow := h.shouldAppendOnAdd()
 	if !appendNow {
-		h.dirtyFile = true
 		h.unsaved++
 	}
 	h.mu.Unlock()
@@ -406,7 +408,7 @@ func (h *history) Clear() {
 	h.mu.Lock()
 	h.entries = h.entries[:0]
 	h.base = 0
-	h.dirtyFile = false
+	h.unsaved = 0
 	h.mu.Unlock()
 	if h.resync != nil {
 		h.resync()
@@ -414,8 +416,8 @@ func (h *history) Clear() {
 }
 
 // Delete removes the entry numbered pos (negative counts from the end) and
-// reports whether pos was in range. The removal is persisted on the next
-// rewrite of the history file.
+// reports whether pos was in range. Like Bash, the history file keeps the
+// entry, and one fewer new entry is appended to it.
 func (h *history) Delete(pos int) bool {
 	if h == nil {
 		return false
@@ -431,7 +433,7 @@ func (h *history) Delete(pos int) bool {
 		return false
 	}
 	h.entries = append(h.entries[:pos-1], h.entries[pos:]...)
-	h.dirtyFile = true
+	h.unsaved = max(h.unsaved-1, 0)
 	return true
 }
 
@@ -439,21 +441,32 @@ func (h *history) appendFile(lines ...string) error {
 	if h == nil || h.cfg.file == "" || len(lines) == 0 {
 		return nil
 	}
-	file, err := os.OpenFile(h.cfg.file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
-	if err != nil {
-		return err
-	}
-	if err := writeHistoryLines(file, lines...); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
+	if err := appendHistoryLines(h.cfg.file, lines...); err != nil {
 		return err
 	}
 	h.mu.Lock()
 	h.fileLines += len(lines)
 	h.mu.Unlock()
 	return nil
+}
+
+// appendHistoryLines appends entries to the history file name. They go out
+// in a single write, so the lines of shells sharing the file cannot
+// interleave.
+func appendHistoryLines(name string, entries ...string) error {
+	var buf bytes.Buffer
+	if err := writeHistoryLines(&buf, entries...); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(buf.Bytes()); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 // writeHistoryLines writes entries to w in history-file format, one encoded
@@ -474,13 +487,25 @@ func (h *history) shouldAppendOnAdd() bool {
 	return h.appendOnAdd()
 }
 
-func (h *history) fileDirty() bool {
-	if h == nil {
-		return false
+// SaveOnExit saves the history at the end of the session as Bash does: it
+// appends the entries added during the session, so that the lines other
+// shells appended meanwhile are kept, unless HISTSIZE dropped some of them,
+// in which case the file is rewritten with the list.
+func (h *history) SaveOnExit() error {
+	if h == nil || h.cfg.file == "" {
+		return nil
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.dirtyFile
+	n, stifled := h.unsaved, h.unsaved > len(h.entries)
+	h.mu.Unlock()
+	switch {
+	case n == 0:
+		return nil
+	case stifled:
+		return h.RewriteFile()
+	default:
+		return h.AppendNew()
+	}
 }
 
 func (h *history) RewriteFile() error {
@@ -511,7 +536,6 @@ func (h *history) WriteFile(name string) error {
 	}
 	if name == h.cfg.file {
 		h.mu.Lock()
-		h.dirtyFile = false
 		h.fileLines = len(entries)
 		h.unsaved = 0
 		h.mu.Unlock()
