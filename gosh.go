@@ -578,7 +578,8 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 	// ^\ reach gosh as signals along with the foreground command. Like Bash,
 	// SIGINT only interrupts the current line and SIGQUIT is ignored; neither
 	// may end the session. Handlers, unlike signal.Ignore, are not inherited
-	// by the commands gosh starts.
+	// by the commands gosh starts. ^Z must not stop the shell either; see
+	// resumeStoppedCommands.
 	var interrupts chan os.Signal
 	if s.cfgNotifySignals() {
 		interrupts = make(chan os.Signal, 1)
@@ -587,6 +588,7 @@ func (s *Shell) runInteractive(ctx context.Context) error {
 		quits := make(chan os.Signal, 1)
 		signal.Notify(quits, syscall.SIGQUIT)
 		defer signal.Stop(quits)
+		defer resumeStoppedCommands()()
 	}
 
 	// reader wraps readline so parser.InteractiveSeq can consume it as an
