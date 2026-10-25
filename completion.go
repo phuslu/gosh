@@ -195,16 +195,23 @@ func (c *autoCompleter) applyCompletionOptions(options []string, ctx completionC
 		addition = append(addition, []rune(tail)...)
 	}
 	if len(options) == 1 {
-		hasTrailingSep := hasTrailingPathSeparator(options[0])
-		if style.noSpace && !hasTrailingSep {
-			// The completion function asked for no trailing separator.
-		} else if style.markDirs && c.completionOptionIsDir(ctx, options[0]) {
-			if !hasTrailingSep {
-				addition = append(addition, rune(os.PathSeparator))
+		// What follows the match: a directory's separator, or a space
+		// unless the completion function asked for none.
+		var sep []rune
+		if hasTrailingPathSeparator(options[0]) {
+			if n := len(addition); n > 0 && (addition[n-1] == '/' || addition[n-1] == '\\') {
+				sep, addition = []rune{addition[n-1]}, addition[:n-1]
 			}
-		} else if !hasTrailingSep {
-			addition = append(addition, ' ')
+		} else if style.markDirs && c.completionOptionIsDir(ctx, options[0]) {
+			sep = []rune{os.PathSeparator}
+		} else if !style.noSpace {
+			sep = []rune{' '}
 		}
+		if ctx.quote != 0 && len(sep) > 0 {
+			// Like readline, close the quote the word started.
+			addition = append(addition, ctx.quote)
+		}
+		addition = append(addition, sep...)
 	}
 	if len(addition) > 0 {
 		return [][]rune{addition}, prefixLen

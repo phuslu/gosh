@@ -334,3 +334,27 @@ func TestVariableCompletion(t *testing.T) {
 		}
 	}
 }
+
+func TestCompletionClosesQuotes(t *testing.T) {
+	c := newProgrammableCompleter(t, "")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a b.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "c d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c.runner.Dir = dir
+	// Like readline, the quote closes before the space or the slash.
+	for _, tc := range []struct{ line, want string }{
+		{`ls "a`, ` b.txt" `},
+		{`ls 'c`, ` d'/`},
+		{`ls "c`, ` d"/`},
+		{`ls c`, `\ d/`},
+	} {
+		got, _ := c.Do([]rune(tc.line), len([]rune(tc.line)))
+		if len(got) != 1 || string(got[0]) != tc.want {
+			t.Errorf("Do(%q) = %q, want %q", tc.line, got, tc.want)
+		}
+	}
+}
